@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Fortress Merge Solo</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="play-area" aria-label="Area partita">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">Fortress Merge</p>
+            <h1>Solo mode</h1>
+          </div>
+          <div class="stat-grid" aria-label="Stato giocatore">
+            <div class="stat"><span>Round</span><strong id="roundValue">1</strong></div>
+            <div class="stat"><span>Prosperita</span><strong id="prosperityValue">0</strong></div>
+            <div class="stat"><span>PV</span><strong id="vpValue">0</strong></div>
+            <div class="stat"><span>Boschi</span><strong id="forestValue">12</strong></div>
+            <div class="stat"><span>Colpi</span><strong id="hitValue">0</strong></div>
+            <div class="stat"><span>Respingi</span><strong id="pushValue">0</strong></div>
+            <div class="stat"><span>Tagli</span><strong id="cutValue">0</strong></div>
+            <div class="stat"><span>Level Up</span><strong id="levelValue">0</strong></div>
+            <div class="stat"><span>Dadi attacco</span><strong id="diceValue">-</strong></div>
+          </div>
+        </header>
+
+        <section class="personal-board-panel" aria-label="Plancia personale">
+          <div class="board-toolbar">
+            <div>
+              <p class="eyebrow">Plancia personale</p>
+              <h2>Regno e invasione</h2>
+            </div>
+            <div class="zoom-controls" aria-label="Controlli zoom plancia personale">
+              <button type="button" data-zoom-target="personal" data-zoom="out" aria-label="Riduci zoom plancia personale">-</button>
+              <span id="personalZoomLabel">100%</span>
+              <button type="button" data-zoom-target="personal" data-zoom="in" aria-label="Aumenta zoom plancia personale">+</button>
+            </div>
+          </div>
+          <div class="placement-toolbar">
+            <div>
+              <span>Selezione</span>
+              <strong id="selectedTool">Nessuna tessera</strong>
+            </div>
+            <button type="button" id="forestMode" disabled>Bosco</button>
+            <button type="button" id="upgradeMode" disabled>Upgrade</button>
+            <button type="button" id="confirmPlacement" disabled>Conferma</button>
+            <button type="button" id="cancelPlacement">Annulla</button>
+          </div>
+          <div class="board-frame personal-frame">
+            <div id="personalStage" class="personal-stage">
+              <div id="boardGrid" class="board-grid" aria-label="Griglia plancia personale"></div>
+              <div id="monsterLayer" class="monster-layer" aria-hidden="true"></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="market-section" aria-label="Mercato edifici">
+          <div class="section-header">
+            <div>
+              <p class="eyebrow">Mercato</p>
+              <h2>15 tessere + token acquisto</h2>
+            </div>
+            <div id="deckInfo" class="deck-info">Pool: 20</div>
+          </div>
+          <div class="market-track-wrap">
+            <div id="marketTrack" class="market-track" aria-label="Tracciato mercato"></div>
+            <div class="market-center">
+              <p class="eyebrow">Prosperita</p>
+              <div id="prosperityTrack" class="prosperity-track" aria-label="Tracciato prosperita"></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="tiles-section" aria-label="Tessere edificio">
+          <div class="section-header">
+            <div>
+              <p class="eyebrow">Archivio 1.0</p>
+              <h2>Tessere</h2>
+            </div>
+          </div>
+          <div class="tile-library" id="tileLibrary"></div>
+        </section>
+      </section>
+
+      <aside class="side-panel" aria-label="Plancia acquisti e log">
+        <section class="board-panel">
+          <div class="board-toolbar">
+            <div>
+              <p class="eyebrow">Plancia acquisti</p>
+              <h2>Prosperita</h2>
+            </div>
+          </div>
+          <div class="side-prosperity">
+            <div id="prosperityTrackSide" class="prosperity-track compact" aria-label="Copia tracciato prosperita"></div>
+          </div>
+        </section>
+
+        <section class="rules-panel" aria-label="Regole usate">
+          <p class="eyebrow">Draft regolamento</p>
+          <ul>
+            <li>Costruire/evolvere aumenta Prosperita.</li>
+            <li>Le soglie Prosperita attivano Attacchi e Level Up.</li>
+            <li>Il giocatore sceglie quale mostro fare salire di livello.</li>
+            <li>Ogni match tra dado tirato e dado stampato muove il mostro di 1.</li>
+            <li>Un edificio colpito assorbe il passo: perde 1 livello o viene distrutto.</li>
+          </ul>
+        </section>
+
+        <section class="log-panel" aria-label="Registro partita">
+          <div class="log-header">
+            <p class="eyebrow">Log</p>
+            <button type="button" id="clearLog">Pulisci</button>
+          </div>
+          <ol id="eventLog"></ol>
+        </section>
+
+        <button type="button" id="resetGame" class="reset-button">Reset partita</button>
+      </aside>
+    </main>
+
+    <script src="script.js"></script>
+  </body>
+</html>
