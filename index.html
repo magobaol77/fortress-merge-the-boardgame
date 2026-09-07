@@ -3,21 +3,39 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Fortress Merge Solo</title>
+    <title>Fortress Merge</title>
     <link rel="stylesheet" href="styles.css">
   </head>
   <body>
     <main class="app-shell">
       <section class="play-area" aria-label="Area partita">
+        <section class="setup-panel" aria-label="Setup partita">
+          <div>
+            <p class="eyebrow">Setup</p>
+            <h2>Modalita partita</h2>
+          </div>
+          <div class="mode-buttons" aria-label="Scelta modalita">
+            <button type="button" data-player-count="1">Solitario</button>
+            <button type="button" data-player-count="2">2 giocatori</button>
+            <button type="button" data-player-count="3">3 giocatori</button>
+            <button type="button" data-player-count="4">4 giocatori</button>
+          </div>
+          <div id="playerSetup" class="player-setup" aria-label="Tipo giocatori"></div>
+          <button type="button" id="startGame">Inizia partita</button>
+        </section>
+
         <header class="topbar">
           <div>
             <p class="eyebrow">Fortress Merge</p>
-            <h1>Solo mode</h1>
+            <h1>Multiplayer</h1>
           </div>
           <div class="stat-grid" aria-label="Stato giocatore">
-            <div class="stat"><span>Round</span><strong id="roundValue">1</strong></div>
+            <div class="stat"><span>Turno</span><strong id="roundValue">1</strong></div>
+            <div class="stat"><span>Giocatore</span><strong id="playerValue">G1</strong></div>
             <div class="stat"><span>Prosperita</span><strong id="prosperityValue">0</strong></div>
             <div class="stat"><span>PV</span><strong id="vpValue">0</strong></div>
+            <div class="stat"><span>Stelle</span><strong id="starValue">0</strong></div>
+            <div class="stat"><span>Distrutti</span><strong id="destroyedValue">0</strong></div>
             <div class="stat"><span>Boschi</span><strong id="forestValue">12</strong></div>
             <div class="stat"><span>Colpi</span><strong id="hitValue">0</strong></div>
             <div class="stat"><span>Respingi</span><strong id="pushValue">0</strong></div>
@@ -44,9 +62,9 @@
               <span>Selezione</span>
               <strong id="selectedTool">Nessuna tessera</strong>
             </div>
-            <button type="button" id="forestMode" disabled>Bosco</button>
-            <button type="button" id="upgradeMode" disabled>Upgrade</button>
             <button type="button" id="confirmPlacement" disabled>Conferma</button>
+            <button type="button" id="destroyBuilding" disabled>Distruggi</button>
+            <button type="button" id="passTurn" disabled>Passa</button>
             <button type="button" id="cancelPlacement">Annulla</button>
           </div>
           <div class="board-frame personal-frame">
@@ -70,6 +88,7 @@
             <div class="market-center">
               <p class="eyebrow">Prosperita</p>
               <div id="prosperityTrack" class="prosperity-track" aria-label="Tracciato prosperita"></div>
+              <div id="reserveMarket" class="reserve-market" aria-label="Riserva tessere infinite"></div>
             </div>
           </div>
         </section>
@@ -99,14 +118,8 @@
         </section>
 
         <section class="rules-panel" aria-label="Regole usate">
-          <p class="eyebrow">Draft regolamento</p>
-          <ul>
-            <li>Costruire/evolvere aumenta Prosperita.</li>
-            <li>Le soglie Prosperita attivano Attacchi e Level Up.</li>
-            <li>Il giocatore sceglie quale mostro fare salire di livello.</li>
-            <li>Ogni match tra dado tirato e dado stampato muove il mostro di 1.</li>
-            <li>Un edificio colpito assorbe il passo: perde 1 livello o viene distrutto.</li>
-          </ul>
+          <p class="eyebrow">Giocatori</p>
+          <div id="playerSummary" class="player-summary" aria-label="Riepilogo giocatori"></div>
         </section>
 
         <section class="log-panel" aria-label="Registro partita">
