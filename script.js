@@ -22,10 +22,9 @@ const buildings = [
     shape: "Croce, 5 caselle",
     image: "1.0/Reggia3.png",
     prosperity: 4,
-    effect: "Ottieni 2 PV",
+    effect: "Rendita: L1 vale 1 PV, L2 vale 3 PV quando raggiungi una casella RE",
     apply: () => {
-      game.vp += 2;
-      addLog("Reggia: +2 PV");
+      addLog("Reggia piazzata: L1 vale 1 PV a ogni Rendita, L2 vale 3 PV");
     },
   },
   {
@@ -106,9 +105,9 @@ const buildings = [
     shape: "Linea, 3 caselle",
     image: "1.0/Muraglia.png",
     prosperity: 1,
-    effect: "Edificio difensivo: assorbe il passo del mostro",
+    effect: "La piazzi dove vuoi. Se un mostro la raggiunge, viene rimossa senza penalita",
     apply: () => {
-      addLog("Muraglia piazzata come difesa sulla griglia");
+      addLog("Muraglia piazzata: puo bloccare un passo del mostro");
     },
   },
   {
@@ -179,6 +178,7 @@ const game = {
   configuredPlayerCount: 1,
   playerTypes: ["human"],
   currentPlayerIndex: 0,
+  viewPlayerIndex: 0,
   players: [],
   deck: [],
   marketSlots: [],
@@ -187,6 +187,7 @@ const game = {
   selected: null,
   over: false,
   botRunning: false,
+  specialRunning: false,
 };
 
 Object.defineProperties(game, {
@@ -258,17 +259,8 @@ const initialForests = [
   [7, 0], [7, 6],
 ];
 
-const starCells = new Map([
-  [cellKey(0, 0), 1],
-  [cellKey(0, 2), 1],
-  [cellKey(0, 5), 1],
-  [cellKey(1, 0), 1],
-  [cellKey(1, 4), 1],
-  [cellKey(2, 3), 1],
-  [cellKey(2, 6), 1],
-  [cellKey(3, 1), 1],
-  [cellKey(4, 5), 1],
-]);
+const rowRewardValues = [4, 3, 3, 3, 3, 2, 2, 2];
+const columnRewardValue = 3;
 
 const attackThresholds = [
   { value: 5, dice: 1, resolved: false },
@@ -288,7 +280,14 @@ const levelUpThresholds = [
   { value: 31, resolved: false },
 ];
 
+const revenueThresholds = [
+  { value: 14, resolved: false },
+  { value: 24, resolved: false },
+  { value: 34, resolved: false },
+];
+
 const endGameThreshold = { value: 34, resolved: false };
+const specialTrackLength = 4;
 
 const zooms = {
   market: 100,
@@ -301,7 +300,7 @@ function cloneEnemies() {
     {
       ...enemy,
       level: 1,
-      position: 0,
+      position: 1,
       damage: 0,
       diceByLevel: enemy.diceByLevel.map((dice) => [...dice]),
     },
@@ -323,6 +322,10 @@ function createPlayerState(index) {
     dead: false,
     actionDone: false,
     destroyedBuildings: 0,
+    finalReached: false,
+    specialStep: 0,
+    completedRows: new Set(),
+    completedCols: new Set(),
     pendingHits: 0,
     pendingPushes: 0,
     pendingReactivations: 0,
@@ -335,10 +338,10 @@ function createPlayerState(index) {
     nextBuildingId: 1,
     buildingsOnBoard: [],
     forests: new Set(initialForests.map(([row, col]) => cellKey(row, col))),
-    collectedStars: new Set(),
     enemies: cloneEnemies(),
     attackThresholds: cloneThresholds(attackThresholds),
     levelUpThresholds: cloneThresholds(levelUpThresholds),
+    revenueThresholds: cloneThresholds(revenueThresholds),
     endGameResolved: false,
   };
 }
@@ -347,8 +350,20 @@ function activePlayer() {
   return game.players[game.currentPlayerIndex] ?? game.players[0];
 }
 
+function viewedPlayer() {
+  return game.players[game.viewPlayerIndex] ?? activePlayer();
+}
+
+function isViewingActivePlayer() {
+  return game.viewPlayerIndex === game.currentPlayerIndex;
+}
+
 function currentEnemies() {
   return activePlayer().enemies;
+}
+
+function viewedEnemies() {
+  return viewedPlayer().enemies;
 }
 
 function renderSetup() {
@@ -397,6 +412,8 @@ const personalStage = document.querySelector("#personalStage");
 const personalZoomLabel = document.querySelector("#personalZoomLabel");
 const boardGrid = document.querySelector("#boardGrid");
 const monsterLayer = document.querySelector("#monsterLayer");
+const columnRewardLayer = document.querySelector("#columnRewardLayer");
+const rowRewardLayer = document.querySelector("#rowRewardLayer");
 const selectedTool = document.querySelector("#selectedTool");
 const confirmPlacement = document.querySelector("#confirmPlacement");
 const destroyBuilding = document.querySelector("#destroyBuilding");
@@ -480,7 +497,7 @@ function purchaseSurcharge(slotIndex) {
 
 function canChooseTileThisTurn() {
   const player = activePlayer();
-  return Boolean(player && !game.over && !player.dead && !player.actionDone && !hasPendingChoices(player));
+  return Boolean(player && !game.over && !player.dead && !player.finalReached && !player.actionDone && !hasPendingChoices(player));
 }
 
 function placedCells(originRow, originCol, buildingId) {
@@ -489,8 +506,8 @@ function placedCells(originRow, originCol, buildingId) {
   return shape.map(([x, y]) => [originRow + y - bottomOffset, originCol + x]);
 }
 
-function buildingAt(row, col) {
-  return game.buildingsOnBoard.find((building) => (
+function buildingAt(row, col, player = activePlayer()) {
+  return player.buildingsOnBoard.find((building) => (
     building.cells.some(([cellRow, cellCol]) => cellRow === row && cellCol === col)
   ));
 }
@@ -549,21 +566,36 @@ function canMergeBuilding(buildingId) {
     && buildingsById(buildingId).some((placedBuilding) => placedBuilding.level < 3);
 }
 
-function remainingStarsForPlayer(player) {
-  return Array.from(starCells.keys()).filter((key) => !player.collectedStars.has(key)).length;
+function completedRewardPoints(player) {
+  const rowPoints = Array.from(player.completedRows).reduce((total, row) => total + rowRewardValues[row], 0);
+  return rowPoints + player.completedCols.size * columnRewardValue;
 }
 
-function collectStarsForCells(cells) {
+function isRowComplete(row) {
+  return Array.from({ length: cols }, (_, col) => buildingAt(row, col))
+    .every(Boolean);
+}
+
+function isColumnComplete(col) {
+  return Array.from({ length: rows }, (_, row) => buildingAt(row, col))
+    .every(Boolean);
+}
+
+function checkCompletionRewards() {
   const player = activePlayer();
-  const collected = cells.reduce((total, [row, col]) => {
-    const key = cellKey(row, col);
-    if (!starCells.has(key) || player.collectedStars.has(key)) return total;
-    player.collectedStars.add(key);
-    return total + 1;
-  }, 0);
-  if (collected > 0) {
-    game.vp += collected;
-    addLog(`${player.name}: raccolte ${collected} Stelle, +${collected} PV`);
+  for (let row = 0; row < rows; row += 1) {
+    if (!player.completedRows.has(row) && isRowComplete(row)) {
+      player.completedRows.add(row);
+      game.vp += rowRewardValues[row];
+      addLog(`${player.name}: riga ${row + 1} completata, +${rowRewardValues[row]} PV`);
+    }
+  }
+  for (let col = 0; col < cols; col += 1) {
+    if (!player.completedCols.has(col) && isColumnComplete(col)) {
+      player.completedCols.add(col);
+      game.vp += columnRewardValue;
+      addLog(`${player.name}: colonna ${col + 1} completata, +${columnRewardValue} PV`);
+    }
   }
 }
 
@@ -598,7 +630,7 @@ function renderStats() {
   playerValue.textContent = player.name;
   prosperityValue.textContent = game.prosperity;
   vpValue.textContent = game.vp;
-  starValue.textContent = `${player.collectedStars.size}/${starCells.size}`;
+  starValue.textContent = completedRewardPoints(player);
   destroyedValue.textContent = `-${player.destroyedBuildings}`;
   forestValue.textContent = game.forests.size;
   hitValue.textContent = game.pendingEffects.filter((effect) => effect.type === "hit").length;
@@ -613,14 +645,15 @@ function renderPlayerSummary() {
   const bestScore = livePlayers.length ? Math.max(...livePlayers.map((player) => player.vp)) : null;
   playerSummary.innerHTML = game.players.map((player, index) => {
     const current = index === game.currentPlayerIndex;
-    const remainingStars = remainingStarsForPlayer(player);
+    const viewed = index === game.viewPlayerIndex;
     const winner = game.over && !player.dead && player.vp === bestScore;
+    const finalStatus = player.finalReached ? ` | Speciale ${player.specialStep}/${specialTrackLength}` : "";
     return `
-      <article class="player-card ${current ? "current" : ""} ${player.dead ? "dead" : ""} ${winner ? "winner" : ""}">
-        <strong>${player.name}${winner ? " vince" : current && !game.over ? " di turno" : ""}</strong>
+      <button type="button" class="player-card ${current ? "current" : ""} ${viewed ? "viewed" : ""} ${player.dead ? "dead" : ""} ${winner ? "winner" : ""}" data-view-player="${index}">
+        <strong>${player.name}${winner ? " vince" : current && !game.over ? " di turno" : ""}${viewed ? " | vista" : ""}</strong>
         <span>${player.dead ? "Morto" : "Vivo"}</span>
-        <em>${player.vp} PV | ${player.prosperity} Prosperita | ${player.collectedStars.size} Stelle | -${player.destroyedBuildings} Distrutti | ${remainingStars} rimaste</em>
-      </article>
+        <em>${player.vp} PV | ${player.prosperity} Prosperita | ${completedRewardPoints(player)} Premi | -${player.destroyedBuildings} Distrutti${finalStatus}</em>
+      </button>
     `;
   }).join("");
 }
@@ -633,58 +666,61 @@ function renderDice(values, matchedValues = []) {
 }
 
 function renderMonstersOnBoard() {
-  monsterLayer.innerHTML = Object.entries(currentEnemies()).map(([key, enemy]) => {
+  const player = viewedPlayer();
+  const pendingLevelOnViewed = isViewingActivePlayer() && game.pendingLevelUps > 0;
+  const pendingEffectsOnViewed = isViewingActivePlayer() ? game.pendingEffects : [];
+  monsterLayer.innerHTML = Object.entries(viewedEnemies()).map(([key, enemy]) => {
     const left = (enemy.colStart / cols) * 100;
     const width = (enemy.width / cols) * 100;
     const top = enemy.position <= 0 ? (-12.5 + enemy.position * 12.5) : ((enemy.position - 1) / rows) * 100;
-    const levelClass = game.pendingLevelUps > 0 && enemy.level < 2 ? " needs-level" : "";
-    const targetClass = game.pendingEffects.some((effect) => effect.allowedEnemies.includes(key)) ? " can-target" : "";
+    const levelClass = pendingLevelOnViewed && enemy.level < 2 ? " needs-level" : "";
+    const targetClass = pendingEffectsOnViewed.some((effect) => effect.allowedEnemies.includes(key)) ? " can-target" : "";
     return `
       <button type="button" class="monster-token${levelClass}${targetClass}" data-level-board="${key}" style="left:${left}%; top:${top}%; width:${width}%;">
         <span class="monster-name">${enemy.name} L${enemy.level}</span>
         <span class="monster-damage">Danni ${enemy.damage}</span>
-        <span class="monster-dice">${renderDice(activeDice(enemy), game.lastAttackRolls)}</span>
+        <span class="monster-dice">${renderDice(activeDice(enemy), player.lastAttackRolls)}</span>
       </button>
     `;
   }).join("");
 }
 
 function renderBoardGrid() {
+  const player = viewedPlayer();
+  const canUseViewedBoard = isViewingActivePlayer();
   const cells = [];
-  const upgradePreviewBuilding = game.selected?.mode === "merge" && game.selected.preview
-    ? buildingAt(game.selected.preview.row, game.selected.preview.col)
+  const upgradePreviewBuilding = canUseViewedBoard && game.selected?.mode === "merge" && game.selected.preview
+    ? buildingAt(game.selected.preview.row, game.selected.preview.col, player)
     : null;
   for (let row = 0; row < rows; row += 1) {
     for (let col = 0; col < cols; col += 1) {
-      const forest = game.forests.has(cellKey(row, col));
-      const building = buildingAt(row, col);
-      const stars = starCells.has(cellKey(row, col)) && !activePlayer().collectedStars.has(cellKey(row, col)) ? 1 : 0;
+      const forest = player.forests.has(cellKey(row, col));
+      const building = buildingAt(row, col, player);
       const classes = ["board-cell"];
       if (forest) classes.push("forest");
-      if (stars && !building) classes.push("star-cell");
       if (building) classes.push("building", `level-${building.level}`);
-      if (game.selected?.mode === "build") {
+      if (canUseViewedBoard && game.selected?.mode === "build") {
         const targetCells = placedCells(row, col, game.selected.buildingId);
         classes.push(validatePlacement(targetCells, game.selected.buildingId) ? "blocked-target" : "placeable-target");
       }
-      if (game.selected?.mode === "forest") {
+      if (canUseViewedBoard && game.selected?.mode === "forest") {
         classes.push(forest ? "forest-target" : "blocked-target");
       }
-      if (game.selected?.mode === "merge") {
+      if (canUseViewedBoard && game.selected?.mode === "merge") {
         classes.push(isUpgradeableTarget(building) ? "placeable-target" : "blocked-target");
       }
-      if (game.selected?.mode === "destroy") {
+      if (canUseViewedBoard && game.selected?.mode === "destroy") {
         classes.push(building ? "placeable-target" : "blocked-target");
       }
-      const preview = previewCells().some(([previewRow, previewCol]) => previewRow === row && previewCol === col);
+      const preview = canUseViewedBoard && previewCells().some(([previewRow, previewCol]) => previewRow === row && previewCol === col);
       if (preview) classes.push(previewError() ? "preview-invalid" : "preview-valid");
-      if (game.selected?.mode === "forest" && game.selected.preview?.row === row && game.selected.preview?.col === col) {
+      if (canUseViewedBoard && game.selected?.mode === "forest" && game.selected.preview?.row === row && game.selected.preview?.col === col) {
         classes.push(previewError() ? "preview-invalid" : "preview-valid");
       }
-      if (game.selected?.mode === "merge" && upgradePreviewBuilding?.cells.some(([previewRow, previewCol]) => previewRow === row && previewCol === col)) {
+      if (canUseViewedBoard && game.selected?.mode === "merge" && upgradePreviewBuilding?.cells.some(([previewRow, previewCol]) => previewRow === row && previewCol === col)) {
         classes.push(previewError() ? "preview-invalid" : "preview-valid");
       }
-      if (game.selected?.mode === "destroy" && building && game.selected.preview?.row === row && game.selected.preview?.col === col) {
+      if (canUseViewedBoard && game.selected?.mode === "destroy" && building && game.selected.preview?.row === row && game.selected.preview?.col === col) {
         classes.push(previewError() ? "preview-invalid" : "preview-valid");
       }
       cells.push(`
@@ -696,7 +732,6 @@ function renderBoardGrid() {
           data-col="${col}"
           data-building="${building ? `${building.short} L${building.level}` : ""}"
           aria-label="Riga ${row + 1}, colonna ${col + 1}">
-          ${stars && !building ? renderStarMarkers(stars) : ""}
         </button>
       `);
     }
@@ -704,9 +739,24 @@ function renderBoardGrid() {
   boardGrid.innerHTML = cells.join("");
 }
 
-function renderStarMarkers(count) {
-  const markers = Array.from({ length: count }, () => `<span class="star-marker">+1</span>`).join("");
-  return `<span class="star-markers" aria-label="${count} punto stella">${markers}</span>`;
+function renderRewardLayers() {
+  const player = viewedPlayer();
+  columnRewardLayer.innerHTML = Array.from({ length: cols }, (_, col) => {
+    if (player.completedCols.has(col)) return "";
+    return `
+      <span class="reward-marker column-reward" style="left:${((col + 0.5) / cols) * 100}%;">
+        <span class="reward-star">★</span><strong>${columnRewardValue}</strong>
+      </span>
+    `;
+  }).join("");
+  rowRewardLayer.innerHTML = rowRewardValues.map((value, row) => {
+    if (player.completedRows.has(row)) return "";
+    return `
+      <span class="reward-marker row-reward" style="top:${((row + 0.5) / rows) * 100}%;">
+        <span class="reward-star">★</span><strong>${value}</strong>
+      </span>
+    `;
+  }).join("");
 }
 
 function shapeBounds(shape) {
@@ -813,23 +863,63 @@ function renderMarket() {
   renderReserveMarket();
 }
 
+function playerTrackValue(player) {
+  if (player.finalReached && player.specialStep > 0) {
+    return endGameThreshold.value + Math.min(player.specialStep, specialTrackLength);
+  }
+  return Math.min(player.prosperity, endGameThreshold.value);
+}
+
 function renderProsperityTrack() {
-  const maxValue = 34;
+  const maxValue = endGameThreshold.value + specialTrackLength;
   const player = activePlayer();
   const attackByValue = new Map(player.attackThresholds.map((threshold) => [threshold.value, threshold]));
   const levelByValue = new Map(player.levelUpThresholds.map((threshold) => [threshold.value, threshold]));
+  const revenueByValue = new Map(player.revenueThresholds.map((threshold) => [threshold.value, threshold]));
+  const currentSpecialValue = player.finalReached && player.specialStep > 0
+    ? endGameThreshold.value + player.specialStep
+    : null;
   const markup = Array.from({ length: maxValue + 1 }, (_, value) => {
     const attack = attackByValue.get(value);
     const level = levelByValue.get(value);
-    const reached = game.prosperity >= value;
-    const current = game.prosperity === value;
+    const revenue = revenueByValue.get(value);
+    const specialStep = value > endGameThreshold.value ? value - endGameThreshold.value : 0;
+    const reached = specialStep ? player.specialStep >= specialStep : game.prosperity >= value;
+    const current = specialStep ? currentSpecialValue === value : game.prosperity === value && !currentSpecialValue;
     const classes = ["prosperity-cell"];
-    if (attack || level) classes.push("danger");
+    if (attack) classes.push("attack");
+    if (level) classes.push("level-up");
+    if (revenue) classes.push("revenue");
+    if (specialStep) classes.push("special");
     if (value === endGameThreshold.value) classes.push("final");
     if (reached) classes.push("reached");
     if (current) classes.push("current");
-    const label = attack ? `${attack.dice}d` : level ? "LU" : value === endGameThreshold.value ? "+2PV" : value;
-    return `<span class="${classes.join(" ")}" title="Prosperita ${value}">${label}</span>`;
+    const label = specialStep ? `${specialStep}d` : attack ? `${attack.dice}d` : level ? "LU" : revenue ? "RE" : value;
+    const title = attack
+      ? `Prosperita ${value}: attacco da ${attack.dice} dadi`
+      : level
+        ? `Prosperita ${value}: level up mostro`
+        : revenue
+          ? `Prosperita ${value}: rendita Reggia`
+          : specialStep
+            ? `Casella speciale ${specialStep}: tira ${specialStep} dadi contro tutti gli altri`
+          : `Prosperita ${value}`;
+    const counters = game.players
+      .map((trackPlayer, index) => ({ trackPlayer, index }))
+      .filter(({ trackPlayer }) => playerTrackValue(trackPlayer) === value)
+      .map(({ trackPlayer, index }) => `
+        <span
+          class="player-track-counter player-${index + 1} ${index === game.currentPlayerIndex ? "current-player" : ""} ${index === game.viewPlayerIndex ? "view-player" : ""}"
+          title="${trackPlayer.name}">
+          ${trackPlayer.name}
+        </span>
+      `).join("");
+    return `
+      <span class="${classes.join(" ")}" title="${title}">
+        <span class="prosperity-label">${label}</span>
+        ${counters ? `<span class="player-track-counters">${counters}</span>` : ""}
+      </span>
+    `;
   }).join("");
   prosperityTrack.innerHTML = markup;
   prosperityTrackSide.innerHTML = markup;
@@ -844,6 +934,32 @@ function renderBoardZoom() {
   personalZoomLabel.textContent = `${zooms.personal}%`;
 }
 
+function pendingChoiceText(player = activePlayer()) {
+  if (game.selected) return "Completa o annulla la selezione";
+  if (player.pendingLevelUps) return "Scegli un mostro per il Level Up";
+  if (player.pendingEffects.length) {
+    const effect = player.pendingEffects[0];
+    return effect.type === "hit" ? "Assegna i danni a un mostro valido" : "Scegli un mostro da respingere";
+  }
+  if (player.pendingReactivations) return "Scegli un edificio adiacente da riattivare";
+  if (player.pendingForestRemovals) return "Rimuovi un Bosco";
+  return "";
+}
+
+function clearPendingChoicesForPass(player = activePlayer()) {
+  const skipped = [];
+  if (player.pendingLevelUps) skipped.push(`${player.pendingLevelUps} Level Up`);
+  if (player.pendingEffects.length) skipped.push(`${player.pendingEffects.length} effetti mostro`);
+  if (player.pendingReactivations) skipped.push(`${player.pendingReactivations} riattivazioni`);
+  if (player.pendingForestRemovals) skipped.push(`${player.pendingForestRemovals} rimozioni Bosco`);
+  player.pendingLevelUps = 0;
+  player.pendingEffects = [];
+  player.pendingReactivations = 0;
+  player.pendingReactivationSources = [];
+  player.pendingForestRemovals = 0;
+  if (skipped.length) addLog(`${player.name}: effetti non usati scartati (${skipped.join(", ")})`);
+}
+
 function renderSelectedTool() {
   if (game.over) {
     selectedTool.textContent = "Partita finita";
@@ -852,10 +968,18 @@ function renderSelectedTool() {
     passTurn.disabled = true;
     return;
   }
-  passTurn.disabled = !activePlayer().actionDone || hasPendingChoices();
-  destroyBuilding.disabled = activePlayer().type === "bot" || Boolean(game.selected) || game.pendingEffects.length > 0 || game.pendingReactivations > 0 || game.pendingForestRemovals > 0 || game.pendingLevelUps > 0;
+  const player = activePlayer();
+  const pendingText = pendingChoiceText(player);
+  passTurn.disabled = Boolean(game.selected) || !player.actionDone;
+  destroyBuilding.disabled = activePlayer().type === "bot" || activePlayer().finalReached || Boolean(game.selected) || game.pendingEffects.length > 0 || game.pendingReactivations > 0 || game.pendingForestRemovals > 0 || game.pendingLevelUps > 0;
   if (!game.selected) {
-    selectedTool.textContent = activePlayer().actionDone ? "Turno pronto: premi Passa" : `Nessuna tessera`;
+    selectedTool.textContent = pendingText
+      ? `Da risolvere: ${pendingText}. Puoi premere Passa per saltarlo`
+      : player.actionDone
+        ? "Turno pronto: premi Passa"
+        : player.finalReached
+          ? `Casella speciale ${Math.min(player.specialStep + 1, specialTrackLength)}/${specialTrackLength}: tiro automatico`
+          : `Nessuna tessera`;
     confirmPlacement.disabled = true;
     return;
   }
@@ -872,6 +996,7 @@ function renderAll() {
   renderStats();
   renderMonstersOnBoard();
   renderBoardGrid();
+  renderRewardLayers();
   renderMarket();
   renderProsperityTrack();
   renderTiles();
@@ -879,15 +1004,20 @@ function renderAll() {
   renderBoardZoom();
   renderSelectedTool();
   renderSetup();
+  scheduleSpecialIfNeeded();
   scheduleBotIfNeeded();
 }
 
 function completeMarketAction(building) {
   const previousProsperity = game.prosperity;
   const surcharge = game.selected?.extraProsperity ?? 0;
-  game.prosperity += building.prosperity + surcharge;
+  const nextProsperity = game.prosperity + building.prosperity + surcharge;
+  game.prosperity = Math.min(endGameThreshold.value, nextProsperity);
   activePlayer().actionDone = true;
   if (surcharge) addLog(`Acquisto oltre le 3 tessere: +${surcharge} Prosperita`);
+  if (nextProsperity > endGameThreshold.value && previousProsperity < endGameThreshold.value) {
+    addLog(`${activePlayer().name}: Prosperita fermata a 34`);
+  }
   movePurchaseTokenFromSelection();
   applySoloMarketDiscard();
   resolveProsperityTriggers(previousProsperity);
@@ -941,8 +1071,7 @@ function areAdjacentCells(firstCells, secondCells) {
 
 function applyPlacedBuildingEffect(building, cells, instance, reactivation = false) {
   if (building.id === "reggia") {
-    game.vp += 2;
-    addLog(`${reactivation ? "Riattiva Reggia" : "Reggia"}: +2 PV`);
+    addLog(`${reactivation ? "Riattiva Reggia" : "Reggia"}: L1 vale 1 PV a ogni Rendita, L2 vale 3 PV`);
   } else if (building.id === "segheria") {
     game.pendingForestRemovals += 3;
     addLog(`${reactivation ? "Riattiva Segheria" : "Segheria"}: 3 rimozioni Bosco disponibili`);
@@ -962,7 +1091,7 @@ function applyPlacedBuildingEffect(building, cells, instance, reactivation = fal
     game.pendingReactivationSources.push({ instanceId: instance.instanceId, cells });
     addLog("Torre: clicca un singolo edificio adiacente da riattivare");
   } else if (building.id === "muraglia") {
-    addLog("Muraglia piazzata: al primo colpo diventa danneggiata");
+    addLog("Muraglia piazzata: se un mostro la raggiunge, viene rimossa senza penalita");
   }
 }
 
@@ -985,11 +1114,25 @@ function resolveProsperityTriggers(previousProsperity) {
     }
   });
 
+  player.revenueThresholds.forEach((threshold) => {
+    if (!threshold.resolved && previousProsperity < threshold.value && game.prosperity >= threshold.value) {
+      threshold.resolved = true;
+      const palaceValue = game.buildingsOnBoard
+        .filter((building) => building.id === "reggia")
+        .reduce((total, building) => total + (building.level >= 2 ? 3 : 1), 0);
+      game.vp += palaceValue;
+      addLog(`Rendita ${threshold.value}: ${palaceValue} PV dalle Reggie`);
+    }
+  });
+
   if (!player.endGameResolved && previousProsperity < endGameThreshold.value && game.prosperity >= endGameThreshold.value) {
     player.endGameResolved = true;
-    game.vp += 2;
-    addLog(`${player.name} raggiunge Prosperita 34: +2 PV`);
-    endGame(`${player.name} ha raggiunto fine Prosperita`);
+    player.finalReached = true;
+    player.specialStep = 0;
+    addLog(`${player.name} raggiunge la casella 34: dal prossimo turno avanza sulle caselle speciali`);
+    if (livePlayersReachedFinal()) {
+      endGame("tutti i giocatori in gioco hanno raggiunto la casella 34");
+    }
   }
 }
 
@@ -1009,13 +1152,24 @@ function finishTurnIfReady() {
 
 function advanceTurn() {
   if (game.over) return;
-  if (!activePlayer().actionDone || hasPendingChoices()) {
-    addLog("Prima completa la mossa e risolvi tutti gli effetti pendenti");
+  const player = activePlayer();
+  if (game.selected) {
+    addLog("Prima completa o annulla la selezione");
     renderAll();
     return;
   }
-  activePlayer().actionDone = false;
+  if (!player.actionDone) {
+    addLog("Prima fai una mossa principale");
+    renderAll();
+    return;
+  }
+  clearPendingChoicesForPass(player);
+  player.actionDone = false;
   if (game.mode === "solo") {
+    if (livePlayersReachedFinal()) {
+      endGame("giocatore arrivato alla casella 34");
+      return;
+    }
     game.round += 1;
     addLog(`Solitario: turno ${game.round}`);
     renderAll();
@@ -1026,12 +1180,83 @@ function advanceTurn() {
     endGame("Rimane un solo giocatore vivo");
     return;
   }
+  if (livePlayersReachedFinal()) {
+    endGame("tutti i giocatori in gioco hanno raggiunto la casella 34");
+    return;
+  }
+  const activePlayers = game.players.filter((player) => !player.dead && !(player.finalReached && player.specialStep >= specialTrackLength));
+  if (!activePlayers.length) {
+    endGame("tutti i giocatori vivi hanno completato le caselle speciali");
+    return;
+  }
   const startIndex = game.currentPlayerIndex;
   do {
     game.currentPlayerIndex = (game.currentPlayerIndex + 1) % game.players.length;
-  } while (game.players[game.currentPlayerIndex].dead && game.currentPlayerIndex !== startIndex);
+  } while (
+    (game.players[game.currentPlayerIndex].dead
+      || (game.players[game.currentPlayerIndex].finalReached && game.players[game.currentPlayerIndex].specialStep >= specialTrackLength))
+    && game.currentPlayerIndex !== startIndex
+  );
   game.round += 1;
+  game.viewPlayerIndex = game.currentPlayerIndex;
   addLog(`Tocca a ${activePlayer().name}`);
+  renderAll();
+}
+
+function withActivePlayer(index, callback) {
+  const previousIndex = game.currentPlayerIndex;
+  game.currentPlayerIndex = index;
+  const result = callback();
+  game.currentPlayerIndex = previousIndex;
+  return result;
+}
+
+function livePlayersReachedFinal() {
+  return game.players
+    .filter((player) => !player.dead)
+    .every((player) => player.finalReached || player.prosperity >= endGameThreshold.value);
+}
+
+function livePlayersCompletedSpecials() {
+  return game.players
+    .filter((player) => !player.dead)
+    .every((player) => player.finalReached && player.specialStep >= specialTrackLength);
+}
+
+function scheduleSpecialIfNeeded() {
+  const player = activePlayer();
+  if (game.specialRunning || game.over || !player || player.dead || !player.finalReached || player.actionDone || hasPendingChoices(player)) return;
+  if (player.specialStep >= specialTrackLength) {
+    player.actionDone = true;
+    if (livePlayersCompletedSpecials()) endGame("tutti i giocatori vivi hanno completato le caselle speciali");
+    return;
+  }
+  game.specialRunning = true;
+  window.setTimeout(runSpecialStep, 450);
+}
+
+function runSpecialStep() {
+  const attacker = activePlayer();
+  if (game.over || !attacker || attacker.dead || !attacker.finalReached || attacker.actionDone || hasPendingChoices(attacker)) {
+    game.specialRunning = false;
+    renderAll();
+    return;
+  }
+  attacker.specialStep += 1;
+  const diceCount = attacker.specialStep;
+  const rolls = Array.from({ length: diceCount }, rollDie);
+  attacker.lastAttackRolls = rolls;
+  addLog(`${attacker.name}: casella speciale ${attacker.specialStep}/${specialTrackLength}, dadi ${rolls.join(", ")}`);
+  game.players.forEach((player, index) => {
+    if (index === game.currentPlayerIndex || player.dead) return;
+    withActivePlayer(index, () => resolveAttack(diceCount, rolls, false, `Speciale di ${attacker.name} su ${player.name}`));
+  });
+  attacker.actionDone = true;
+  game.specialRunning = false;
+  if (livePlayersCompletedSpecials()) {
+    endGame("tutti i giocatori vivi hanno completato le caselle speciali");
+    return;
+  }
   renderAll();
 }
 
@@ -1084,10 +1309,11 @@ function bestEnemyForEffect(effect) {
 function bestForestCell() {
   return Array.from(game.forests).map((key) => {
     const [row, col] = key.split(",").map(Number);
-    const stars = starCells.has(key) && !activePlayer().collectedStars.has(key) ? 1 : 0;
+    const rowPotential = activePlayer().completedRows.has(row) ? 0 : rowRewardValues[row];
+    const colPotential = activePlayer().completedCols.has(col) ? 0 : columnRewardValue;
     const nearbyBuildings = [[row - 1, col], [row + 1, col], [row, col - 1], [row, col + 1]]
       .filter(([nextRow, nextCol]) => buildingAt(nextRow, nextCol)).length;
-    return { row, col, score: stars * 10 + nearbyBuildings * 2 + row };
+    return { row, col, score: rowPotential + colPotential + nearbyBuildings * 2 + row };
   }).sort((first, second) => second.score - first.score)[0] ?? null;
 }
 
@@ -1103,13 +1329,22 @@ function allValidPlacements(buildingId) {
 }
 
 function scorePlacement(building, cells) {
-  const coveredStars = cells.reduce((total, [row, col]) => {
-    const key = cellKey(row, col);
-    return total + (starCells.has(key) && !activePlayer().collectedStars.has(key) ? 1 : 0);
-  }, 0);
   const enemyKeys = enemiesForCells(cells);
   const pressure = enemyKeys.reduce((total, key) => total + enemyPressure(currentEnemies()[key]), 0);
-  let score = coveredStars * 12 + cells.reduce((total, [row]) => total + row * 0.08, 0);
+  const rowsTouched = new Set(cells.map(([row]) => row));
+  const colsTouched = new Set(cells.map(([, col]) => col));
+  const rewardPotential = Array.from(rowsTouched).reduce((total, row) => {
+    if (activePlayer().completedRows.has(row)) return total;
+    const filled = Array.from({ length: cols }, (_, col) => buildingAt(row, col)).filter(Boolean).length;
+    const added = cells.filter(([cellRow]) => cellRow === row).length;
+    return total + (filled + added >= cols ? rowRewardValues[row] * 14 : (filled + added) * rowRewardValues[row] * 0.7);
+  }, 0) + Array.from(colsTouched).reduce((total, col) => {
+    if (activePlayer().completedCols.has(col)) return total;
+    const filled = Array.from({ length: rows }, (_, row) => buildingAt(row, col)).filter(Boolean).length;
+    const added = cells.filter(([, cellCol]) => cellCol === col).length;
+    return total + (filled + added >= rows ? columnRewardValue * 14 : (filled + added) * columnRewardValue * 0.45);
+  }, 0);
+  let score = rewardPotential + cells.reduce((total, [row]) => total + row * 0.08, 0);
   if (building.id === "reggia") score += 6;
   if (building.id === "segheria") score += game.forests.size > 8 ? 7 : 3;
   if (building.id === "capanna") score += game.forests.size ? 5 : -8;
@@ -1262,6 +1497,10 @@ function runBotStep() {
 function scheduleBotIfNeeded() {
   const player = activePlayer();
   if (game.botRunning || game.over || !player || player.type !== "bot" || player.dead) return;
+  if (player.finalReached) {
+    if (player.actionDone) window.setTimeout(advanceTurn, 250);
+    return;
+  }
   game.botRunning = true;
   window.setTimeout(runBotStep, 450);
 }
@@ -1293,6 +1532,7 @@ function selectMarketAction(slotIndex, mode = "build") {
     return;
   }
   const extraProsperity = purchaseSurcharge(slotIndex);
+  game.viewPlayerIndex = game.currentPlayerIndex;
   game.selected = { buildingId: slot.buildingId, mode, slotIndex, extraProsperity, preview: null };
   const building = getBuilding(slot.buildingId);
   addLog(mode === "merge"
@@ -1318,6 +1558,7 @@ function selectReserveAction(buildingId, mode = "build") {
     addLog("Per fare Merge servono gia due edifici uguali in plancia");
     return;
   }
+  game.viewPlayerIndex = game.currentPlayerIndex;
   game.selected = { buildingId, mode, source: "reserve", preview: null };
   addLog(mode === "merge"
     ? `${building.name}: quale edificio rimuovere? L'altro fara Merge. Il token andra al centro quando confermi`
@@ -1356,13 +1597,13 @@ function placeBuilding(row, col) {
     id: building.id,
     name: building.name,
     short: building.short,
-    level: building.id === "muraglia" ? 2 : 1,
+    level: 1,
     cells,
   };
   game.buildingsOnBoard.push(placedBuilding);
   game.nextBuildingId += 1;
-  collectStarsForCells(cells);
   applyPlacedBuildingEffect(building, cells, placedBuilding);
+  checkCompletionRewards();
   completeMarketAction(building);
   addLog(`Piazzato ${building.name} in riga ${row + 1}, colonna ${col + 1}`);
   game.selected = null;
@@ -1407,6 +1648,7 @@ function upgradeSelectedBuildingAt(row, col) {
   survivor.level += 1;
   game.vp += 1;
   applyPlacedBuildingEffect(building, survivor.cells, survivor);
+  checkCompletionRewards();
   completeMarketAction(building);
   addLog(`${removedBuilding.name} rimossa: ${survivor.name} sale a livello ${survivor.level}, +1 PV e effetto attivato`);
   game.selected = null;
@@ -1424,8 +1666,12 @@ function destroySelectedBuildingAt(row, col) {
   }
   game.buildingsOnBoard = game.buildingsOnBoard.filter((item) => item.instanceId !== target.instanceId);
   game.pendingReactivationSources = game.pendingReactivationSources.filter((source) => source.instanceId !== target.instanceId);
-  activePlayer().destroyedBuildings += 1;
-  addLog(`${target.name} distrutto volontariamente: -1 PV a fine partita`);
+  if (target.id === "muraglia") {
+    addLog("Muraglia distrutta volontariamente: nessuna penalita a fine partita");
+  } else {
+    activePlayer().destroyedBuildings += 1;
+    addLog(`${target.name} distrutto volontariamente: -1 PV a fine partita`);
+  }
   game.selected = null;
   renderAll();
 }
@@ -1475,57 +1721,61 @@ function removeForestAt(row, col, consumeMarketTile = false) {
 }
 
 function damageBuilding(building) {
-  if (building.id === "muraglia" && building.level > 1) {
-    building.level = 1;
-    building.short = "MUR!";
-    addLog("Muraglia colpita: diventa danneggiata");
+  if (building.id === "muraglia") {
+    game.buildingsOnBoard = game.buildingsOnBoard.filter((item) => item.instanceId !== building.instanceId);
+    game.pendingReactivationSources = game.pendingReactivationSources.filter((source) => source.instanceId !== building.instanceId);
+    addLog("Muraglia rimossa dal mostro: nessuna penalita a fine partita");
     return;
   }
   if (building.level > 1) {
     building.level -= 1;
-    addLog(`${building.name} assorbe il passo e scende al livello ${building.level}`);
+    addLog(`${building.name} colpito dal mostro: scende a livello ${building.level}`);
     return;
   }
   game.buildingsOnBoard = game.buildingsOnBoard.filter((item) => item.instanceId !== building.instanceId);
   game.pendingReactivationSources = game.pendingReactivationSources.filter((source) => source.instanceId !== building.instanceId);
   activePlayer().destroyedBuildings += 1;
-  addLog(`${building.name} assorbe il passo e viene distrutto`);
+  addLog(`${building.name} viene distrutto dal mostro: -1 PV a fine partita`);
 }
 
 function advanceEnemy(key) {
   const enemy = currentEnemies()[key];
-  if (enemy.position < 0) {
-    enemy.position += 1;
-    addLog(`${enemy.name} torna alla partenza`);
+  if (enemy.position <= 0) {
+    enemy.position = 1;
+    addLog(`${enemy.name} entra alla riga 1`);
     return;
   }
   const targetRow = enemy.position;
-  if (targetRow >= rows) {
-    eliminateActivePlayer(`${enemy.name} supera il fondo`);
-    return;
-  }
 
   const coveredBuildings = new Map();
-  for (let col = enemy.colStart; col < enemy.colStart + enemy.width; col += 1) {
-    const building = buildingAt(targetRow, col);
-    if (building) coveredBuildings.set(building.instanceId, building);
+  if (targetRow < rows) {
+    for (let col = enemy.colStart; col < enemy.colStart + enemy.width; col += 1) {
+      const building = buildingAt(targetRow, col);
+      if (building) coveredBuildings.set(building.instanceId, building);
+    }
   }
 
   if (coveredBuildings.size > 0) {
     coveredBuildings.forEach(damageBuilding);
-    renderAll();
     return;
   }
 
-  enemy.position = Math.min(rows, enemy.position + 1);
+  if (targetRow >= rows - 1) {
+    game.vp -= 3;
+    enemy.position = 0;
+    enemy.damage = 0;
+    addLog(`${enemy.name} raggiunge l'ultima riga: -3 PV e riparte dalla riga 0`);
+    return;
+  }
+
+  enemy.position += 1;
   addLog(`${enemy.name} avanza alla riga ${enemy.position}`);
-  if (enemy.position >= rows) eliminateActivePlayer(`${enemy.name} raggiunge il fondo`);
 }
 
-function resolveAttack(diceCount = 2) {
+function resolveAttack(diceCount = 2, forcedRolls = null, shouldRender = true, label = "Attacco") {
   if (game.over) return;
-  game.lastAttackRolls = Array.from({ length: diceCount }, rollDie);
-  addLog(`Attacco: dadi ${game.lastAttackRolls.join(", ")}`);
+  game.lastAttackRolls = forcedRolls ? [...forcedRolls] : Array.from({ length: diceCount }, rollDie);
+  addLog(`${label}: dadi ${game.lastAttackRolls.join(", ")}`);
 
   Object.entries(currentEnemies()).forEach(([key, enemy]) => {
     if (game.over) return;
@@ -1536,7 +1786,7 @@ function resolveAttack(diceCount = 2) {
     if (matches > 0) addLog(`${enemy.name}: ${matches} match`);
   });
 
-  renderAll();
+  if (shouldRender) renderAll();
 }
 
 function levelUpEnemy(key) {
@@ -1564,14 +1814,14 @@ function applyHitToEnemy(key) {
     enemy.damage = 0;
     enemy.position = 0;
     game.vp += 1;
-    addLog(`${enemy.name} sconfitto: +1 PV e torna fuori dalla griglia`);
+    addLog(`${enemy.name} sconfitto: +1 PV e torna alla riga 0`);
   }
 }
 
 function applyPushToEnemy(key) {
   const enemy = currentEnemies()[key];
-  enemy.position = Math.max(-1, enemy.position - 1);
-  addLog(`Spinta su ${enemy.name}`);
+  enemy.position = Math.max(0, enemy.position - 1);
+  addLog(`Spinta su ${enemy.name}: riga ${enemy.position}`);
 }
 
 function applyPendingEffectToEnemy(key) {
@@ -1618,6 +1868,7 @@ function resetGame() {
   Object.assign(game, {
     round: 1,
     currentPlayerIndex: 0,
+    viewPlayerIndex: 0,
     players: Array.from({ length: game.configuredPlayerCount }, (_, index) => createPlayerState(index)),
     deck: [],
     marketSlots: [],
@@ -1626,6 +1877,7 @@ function resetGame() {
     selected: null,
     over: false,
     botRunning: false,
+    specialRunning: false,
   });
   setupMarketTrack();
 
@@ -1635,6 +1887,14 @@ function resetGame() {
 }
 
 document.addEventListener("click", (event) => {
+  const viewTarget = event.target.closest("[data-view-player]");
+  if (viewTarget) {
+    game.viewPlayerIndex = Number(viewTarget.dataset.viewPlayer);
+    game.selected = null;
+    renderAll();
+    return;
+  }
+
   const actionTarget = event.target.closest("[data-select-build], [data-select-reserve], [data-level-board], [data-row]");
   if (!actionTarget) return;
   if (activePlayer()?.type === "bot") return;
@@ -1649,11 +1909,19 @@ document.addEventListener("click", (event) => {
   if (selectBuild !== undefined) selectMarketAction(Number(selectBuild), buyMode);
   if (selectReserve !== undefined) selectReserveAction(selectReserve, buyMode);
   if (levelBoardKey) {
+    if (!isViewingActivePlayer()) {
+      addLog(`Stai guardando ${viewedPlayer().name}: clicca ${activePlayer().name} per agire sul turno`);
+      return;
+    }
     if (game.pendingLevelUps > 0) levelUpEnemy(levelBoardKey);
     else applyPendingEffectToEnemy(levelBoardKey);
   }
 
   if (row !== undefined && col !== undefined) {
+    if (!isViewingActivePlayer()) {
+      addLog(`Stai guardando ${viewedPlayer().name}: clicca ${activePlayer().name} per agire sul turno`);
+      return;
+    }
     const cellRow = Number(row);
     const cellCol = Number(col);
     if (game.selected?.mode === "build" || game.selected?.mode === "forest" || game.selected?.mode === "merge" || game.selected?.mode === "destroy") previewPlacement(cellRow, cellCol);
@@ -1676,6 +1944,7 @@ document.querySelector("#confirmPlacement").addEventListener("click", () => {
 });
 document.querySelector("#destroyBuilding").addEventListener("click", () => {
   if (game.over || activePlayer().type === "bot" || hasPendingChoices()) return;
+  game.viewPlayerIndex = game.currentPlayerIndex;
   game.selected = { mode: "destroy", preview: null };
   addLog("Distruggi edificio: scegli un tuo edificio da rimuovere");
   renderAll();
