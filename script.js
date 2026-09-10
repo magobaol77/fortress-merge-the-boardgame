@@ -11,6 +11,7 @@ const buildingShapes = {
   muraglia: [[0, 0], [1, 0], [2, 0]],
   capanna: [[0, 0]],
   casaCavaliere: [[0, 0]],
+  casaArciere: [[0, 0]],
 };
 
 const buildings = [
@@ -22,9 +23,10 @@ const buildings = [
     shape: "Croce, 5 caselle",
     image: "1.0/Reggia3.png",
     prosperity: 4,
-    effect: "Rendita: L1 vale 1 PV, L2 vale 3 PV quando raggiungi una casella RE",
+    effect: "Ottieni 2 PV",
     apply: () => {
-      addLog("Reggia piazzata: L1 vale 1 PV a ogni Rendita, L2 vale 3 PV");
+      game.vp += 2;
+      addLog("Reggia: +2 PV");
     },
   },
   {
@@ -138,9 +140,62 @@ const buildings = [
       addLog("Casa del cavaliere: 1 Respingimento disponibile");
     },
   },
+  {
+    id: "casaArciere",
+    name: "Casa dell'arciere",
+    short: "ARC",
+    color: "#c78945",
+    shape: "Singola, 1 casella",
+    prosperity: 3,
+    effect: "Effettua 1 Colpo",
+    reserveOnly: true,
+    apply: () => {
+      game.pendingHits += 1;
+      addLog("Casa dell'arciere: 1 Colpo disponibile");
+    },
+  },
 ];
 
-const reserveBuildingIds = ["capanna", "casaCavaliere"];
+const reserveBuildingIds = ["capanna", "casaCavaliere", "casaArciere"];
+
+const objectiveRewards = [2, 4, 6];
+const objectiveDeck = [
+  {
+    id: "bonifica",
+    name: "Bonifica",
+    statLabel: "Boschi",
+    thresholds: [7, 11, 15],
+    getValue: (player) => player.forestsRemoved,
+  },
+  {
+    id: "caccia",
+    name: "Caccia",
+    statLabel: "Mostri",
+    thresholds: [1, 2, 3],
+    getValue: (player) => player.monstersKilled,
+  },
+  {
+    id: "maestria",
+    name: "Maestria",
+    statLabel: "Merge",
+    thresholds: [1, 2, 3],
+    getValue: (player) => player.mergesMade,
+  },
+  {
+    id: "espansione",
+    name: "Espansione",
+    statLabel: "Righe",
+    thresholds: [1, 2, 3],
+    getValue: (player) => completedRowCount(player),
+  },
+  {
+    id: "prestigio",
+    name: "Prestigio",
+    statLabel: "PV",
+    thresholds: [5, 8, 11],
+    getValue: (player) => player.vp,
+  },
+];
 
 const enemies = {
   left: {
@@ -159,7 +214,7 @@ const enemies = {
     level: 1,
     position: 0,
     damage: 0,
-    diceByLevel: [[4], [4, 5]],
+    diceByLevel: [[3, 4], [3, 4]],
   },
   right: {
     name: "Troll",
@@ -177,6 +232,7 @@ const game = {
   mode: "solo",
   configuredPlayerCount: 1,
   playerTypes: ["human"],
+  playerNames: ["G1"],
   currentPlayerIndex: 0,
   viewPlayerIndex: 0,
   players: [],
@@ -188,6 +244,10 @@ const game = {
   over: false,
   botRunning: false,
   specialRunning: false,
+  attackRunning: false,
+  activeObjectives: [],
+  started: false,
+  recordsSaved: false,
 };
 
 Object.defineProperties(game, {
@@ -259,9 +319,6 @@ const initialForests = [
   [7, 0], [7, 6],
 ];
 
-const rowRewardValues = [4, 3, 3, 3, 3, 2, 2, 2];
-const columnRewardValue = 3;
-
 const attackThresholds = [
   { value: 5, dice: 1, resolved: false },
   { value: 9, dice: 1, resolved: false },
@@ -274,24 +331,14 @@ const attackThresholds = [
   { value: 33, dice: 4, resolved: false },
 ];
 
-const levelUpThresholds = [
-  { value: 11, resolved: false },
-  { value: 21, resolved: false },
-  { value: 31, resolved: false },
-];
-
-const revenueThresholds = [
-  { value: 14, resolved: false },
-  { value: 24, resolved: false },
-  { value: 34, resolved: false },
-];
+const levelUpThresholds = [];
 
 const endGameThreshold = { value: 34, resolved: false };
 const specialTrackLength = 4;
 
 const zooms = {
   market: 100,
-  personal: 100,
+  personal: 50,
 };
 
 function cloneEnemies() {
@@ -311,17 +358,37 @@ function cloneThresholds(thresholds) {
   return thresholds.map((threshold) => ({ ...threshold, resolved: false }));
 }
 
+function fixedBotName(index) {
+  const botNumber = game.playerTypes
+    .slice(0, index + 1)
+    .filter((type) => type === "bot").length;
+  return `Automa ${Math.max(1, botNumber)}`;
+}
+
+function setupPlayerName(index, type) {
+  if (type === "bot") return fixedBotName(index);
+  return (game.playerNames[index] || "").trim() || `G${index + 1}`;
+}
+
 function createPlayerState(index) {
   const type = game.playerTypes[index] ?? (index === 0 ? "human" : "bot");
   return {
     id: index + 1,
-    name: `G${index + 1}`,
+    name: setupPlayerName(index, type),
     type,
     prosperity: 0,
     vp: 0,
+    objectiveVp: 0,
     dead: false,
     actionDone: false,
     destroyedBuildings: 0,
+    fortressVp: 0,
+    invasionMalus: 0,
+    forestsRemoved: 0,
+    monstersKilled: 0,
+    mergesMade: 0,
+    objectiveClaimedThisTurn: false,
+    claimedObjectives: {},
     finalReached: false,
     specialStep: 0,
     completedRows: new Set(),
@@ -331,7 +398,9 @@ function createPlayerState(index) {
     pendingReactivations: 0,
     pendingForestRemovals: 0,
     pendingEffects: [],
+    pendingAttacks: [],
     pendingReactivationSources: [],
+    reactivatedTowersThisTurn: new Set(),
     pendingLevelUps: 0,
     lastAttackRolls: [],
     finalScored: false,
@@ -341,7 +410,6 @@ function createPlayerState(index) {
     enemies: cloneEnemies(),
     attackThresholds: cloneThresholds(attackThresholds),
     levelUpThresholds: cloneThresholds(levelUpThresholds),
-    revenueThresholds: cloneThresholds(revenueThresholds),
     endGameResolved: false,
   };
 }
@@ -373,10 +441,13 @@ function renderSetup() {
   });
   playerSetup.innerHTML = Array.from({ length: game.configuredPlayerCount }, (_, index) => {
     const type = game.playerTypes[index] ?? (index === 0 ? "human" : "bot");
+    const name = setupPlayerName(index, type);
     const disabledHuman = game.configuredPlayerCount === 1 && index === 0 ? "disabled" : "";
+    const disabledName = type === "bot" ? "disabled" : "";
     return `
       <label class="player-type-row">
         <span>G${index + 1}</span>
+        <input type="text" data-player-name="${index}" value="${escapeHtml(name)}" placeholder="Nome" ${disabledName}>
         <select data-player-type="${index}" ${disabledHuman}>
           <option value="human" ${type === "human" ? "selected" : ""}>Giocatore</option>
           <option value="bot" ${type === "bot" ? "selected" : ""}>Automa</option>
@@ -390,9 +461,12 @@ const roundValue = document.querySelector("#roundValue");
 const playerValue = document.querySelector("#playerValue");
 const prosperityValue = document.querySelector("#prosperityValue");
 const vpValue = document.querySelector("#vpValue");
-const starValue = document.querySelector("#starValue");
+const objectiveValue = document.querySelector("#objectiveValue");
 const destroyedValue = document.querySelector("#destroyedValue");
 const forestValue = document.querySelector("#forestValue");
+const killValue = document.querySelector("#killValue");
+const rowValue = document.querySelector("#rowValue");
+const mergeValue = document.querySelector("#mergeValue");
 const hitValue = document.querySelector("#hitValue");
 const pushValue = document.querySelector("#pushValue");
 const cutValue = document.querySelector("#cutValue");
@@ -405,15 +479,20 @@ const reserveMarket = document.querySelector("#reserveMarket");
 const deckInfo = document.querySelector("#deckInfo");
 const tileLibrary = document.querySelector("#tileLibrary");
 const playerSummary = document.querySelector("#playerSummary");
+const objectivesPanel = document.querySelector("#objectivesPanel");
 const playerSetup = document.querySelector("#playerSetup");
 const startGame = document.querySelector("#startGame");
+const startScreen = document.querySelector("#startScreen");
+const gameScreen = document.querySelector("#gameScreen");
+const highscoreList = document.querySelector("#highscoreList");
+const clearRecords = document.querySelector("#clearRecords");
+const returnToMenu = document.querySelector("#returnToMenu");
+const abandonGame = document.querySelector("#abandonGame");
 const log = document.querySelector("#eventLog");
 const personalStage = document.querySelector("#personalStage");
 const personalZoomLabel = document.querySelector("#personalZoomLabel");
 const boardGrid = document.querySelector("#boardGrid");
 const monsterLayer = document.querySelector("#monsterLayer");
-const columnRewardLayer = document.querySelector("#columnRewardLayer");
-const rowRewardLayer = document.querySelector("#rowRewardLayer");
 const selectedTool = document.querySelector("#selectedTool");
 const confirmPlacement = document.querySelector("#confirmPlacement");
 const destroyBuilding = document.querySelector("#destroyBuilding");
@@ -421,6 +500,15 @@ const passTurn = document.querySelector("#passTurn");
 
 function cellKey(row, col) {
   return `${row},${col}`;
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
 }
 
 function getBuilding(id) {
@@ -450,9 +538,184 @@ function shuffle(items) {
   return shuffled;
 }
 
+function setupObjectives() {
+  game.activeObjectives = shuffle(objectiveDeck).slice(0, 3).map((objective) => ({
+    ...objective,
+    claimed: objective.thresholds.map(() => null),
+  }));
+}
+
+function completedRowCount(player = activePlayer()) {
+  let completed = 0;
+  for (let row = 0; row < rows; row += 1) {
+    const filled = Array.from({ length: cols }, (_, col) => buildingAt(row, col, player)).every(Boolean);
+    if (filled) completed += 1;
+  }
+  return completed;
+}
+
+function totalObjectiveVp(player = activePlayer()) {
+  return Object.values(player.claimedObjectives).reduce((total, claim) => total + claim.points, 0);
+}
+
+function canClaimObjective(objective, levelIndex, player = activePlayer()) {
+  if (!player || player.dead || !player.actionDone || hasPendingChoices(player) || player.objectiveClaimedThisTurn || player.claimedObjectives[objective.id]) return false;
+  if (objective.claimed[levelIndex]) return false;
+  return objective.getValue(player) >= objective.thresholds[levelIndex];
+}
+
+function claimObjective(objectiveId, levelIndex, playerIndex = game.currentPlayerIndex) {
+  const player = game.players[playerIndex];
+  const objective = game.activeObjectives.find((item) => item.id === objectiveId);
+  if (!player || !objective || game.over) return false;
+  if (player.type === "human" && (!player.actionDone || hasPendingChoices(player))) {
+    addLog("Puoi reclamare un obiettivo a fine turno, dopo aver risolto la mossa");
+    renderAll();
+    return false;
+  }
+  if (!canClaimObjective(objective, levelIndex, player)) {
+    addLog("Questo obiettivo non e reclamabile");
+    renderAll();
+    return false;
+  }
+  const claim = {
+    objectiveId,
+    level: levelIndex + 1,
+    threshold: objective.thresholds[levelIndex],
+    points: objectiveRewards[levelIndex],
+  };
+  objective.claimed[levelIndex] = player.id;
+  player.claimedObjectives[objective.id] = claim;
+  player.objectiveVp = totalObjectiveVp(player);
+  player.objectiveClaimedThisTurn = true;
+  addLog(`${player.name} reclama ${objective.name} livello ${claim.level}: ${claim.points} PV finali`);
+  renderAll();
+  return true;
+}
+
+function bestObjectiveClaim(player = activePlayer()) {
+  const claims = [];
+  game.activeObjectives.forEach((objective) => {
+    objective.thresholds.forEach((threshold, levelIndex) => {
+      if (canClaimObjective(objective, levelIndex, player)) {
+        claims.push({ objective, levelIndex, points: objectiveRewards[levelIndex], threshold });
+      }
+    });
+  });
+  return claims.sort((first, second) => (
+    second.points - first.points || second.threshold - first.threshold
+  ))[0] ?? null;
+}
+
+function loadRecords() {
+  try {
+    return JSON.parse(localStorage.getItem("fortressMergeRecords") || "[]");
+  } catch {
+    return [];
+  }
+}
+
+function saveRecords(records) {
+  localStorage.setItem("fortressMergeRecords", JSON.stringify(records.slice(0, 50)));
+}
+
+function playerScoreBreakdown(player) {
+  const objectives = totalObjectiveVp(player);
+  const destroyedMalus = player.destroyedBuildings;
+  const invasionMalus = player.invasionMalus;
+  return {
+    objectives,
+    kills: player.monstersKilled,
+    merges: player.mergesMade,
+    fortresses: player.fortressVp,
+    destroyedMalus,
+    invasionMalus,
+    totalMalus: destroyedMalus + invasionMalus,
+  };
+}
+
+function saveGameRecords(reason) {
+  if (game.recordsSaved) return;
+  const now = new Date();
+  const entries = game.players.map((player) => {
+    const breakdown = playerScoreBreakdown(player);
+    return {
+      id: `${now.getTime()}-${player.id}`,
+      date: now.toLocaleDateString("it-IT"),
+      name: player.name,
+      mode: game.mode === "solo" ? "Solitario" : `${game.configuredPlayerCount} giocatori`,
+      type: player.type === "bot" ? "Automa" : "Giocatore",
+      score: player.vp,
+      dead: player.dead,
+      reason,
+      breakdown,
+    };
+  });
+  const records = [...entries, ...loadRecords()].sort((first, second) => second.score - first.score);
+  saveRecords(records);
+  game.recordsSaved = true;
+  renderHighscores();
+}
+
+function renderHighscores() {
+  const records = loadRecords();
+  if (!records.length) {
+    highscoreList.innerHTML = `<p class="empty-records">Nessuna partita registrata</p>`;
+    return;
+  }
+  highscoreList.innerHTML = records.slice(0, 12).map((record, index) => {
+    const breakdown = record.breakdown ?? {};
+    return `
+      <article class="highscore-card ${index === 0 ? "best" : ""}">
+        <header>
+          <strong>${index + 1}. ${escapeHtml(record.name)}</strong>
+          <span>${record.score} PV</span>
+        </header>
+        <p>${escapeHtml(record.mode)} | ${escapeHtml(record.type)} | ${escapeHtml(record.date)}${record.dead ? " | Morto" : ""}</p>
+        <dl>
+          <div><dt>Obiettivi</dt><dd>+${breakdown.objectives ?? 0}</dd></div>
+          <div><dt>Uccisioni</dt><dd>+${breakdown.kills ?? 0}</dd></div>
+          <div><dt>Merge</dt><dd>+${breakdown.merges ?? 0}</dd></div>
+          <div><dt>Fortezze</dt><dd>+${breakdown.fortresses ?? 0}</dd></div>
+          <div><dt>Malus</dt><dd>-${breakdown.totalMalus ?? 0} <small>${breakdown.destroyedMalus ?? 0}/${breakdown.invasionMalus ?? 0}</small></dd></div>
+        </dl>
+      </article>
+    `;
+  }).join("");
+}
+
+function showStartScreen() {
+  if (game.started) {
+    game.over = true;
+    game.selected = null;
+    game.botRunning = false;
+    game.specialRunning = false;
+    game.attackRunning = false;
+  }
+  game.started = false;
+  startScreen.classList.remove("is-hidden");
+  gameScreen.classList.add("is-hidden");
+  renderSetup();
+  renderHighscores();
+}
+
+function showGameScreen() {
+  game.started = true;
+  startScreen.classList.add("is-hidden");
+  gameScreen.classList.remove("is-hidden");
+}
+
+function handleAbandonGame() {
+  if (!game.started || game.over) return;
+  if (!window.confirm("Abbandonare la partita in corso? Non verra salvata nel registro.")) return;
+  game.recordsSaved = true;
+  addLog("Partita abbandonata: nessun risultato salvato");
+  showStartScreen();
+}
+
 function createTilePool() {
   return shuffle(buildings.filter((building) => !building.reserveOnly).flatMap((building) => (
-    Array.from({ length: 5 }, (_, copyIndex) => ({
+    Array.from({ length: 10 }, (_, copyIndex) => ({
       tileId: `${building.id}-${copyIndex + 1}`,
       buildingId: building.id,
     }))
@@ -500,6 +763,10 @@ function canChooseTileThisTurn() {
   return Boolean(player && !game.over && !player.dead && !player.finalReached && !player.actionDone && !hasPendingChoices(player));
 }
 
+function canReceiveInvasion(player) {
+  return Boolean(player && !player.dead && !player.finalReached && player.prosperity < endGameThreshold.value);
+}
+
 function placedCells(originRow, originCol, buildingId) {
   const shape = buildingShapes[buildingId];
   const bottomOffset = Math.max(...shape.map(([, y]) => y));
@@ -545,17 +812,18 @@ function isUpgradeableTarget(building) {
   if (!building || game.selected?.buildingId !== building.id || building.id === "muraglia") return false;
   const sameBuildings = buildingsById(building.id);
   return Boolean(building)
+    && building.level < 3
     && sameBuildings.length >= 2
-    && sameBuildings.some((otherBuilding) => otherBuilding.instanceId !== building.instanceId && otherBuilding.level < 3);
+    && sameBuildings.some((otherBuilding) => otherBuilding.instanceId !== building.instanceId);
 }
 
 function buildingsById(buildingId) {
   return game.buildingsOnBoard.filter((building) => building.id === buildingId);
 }
 
-function upgradeSurvivorForRemoved(removedBuilding) {
-  return buildingsById(removedBuilding.id)
-    .filter((building) => building.instanceId !== removedBuilding.instanceId && building.level < 3)
+function mergeRemovalForSurvivor(survivor) {
+  return buildingsById(survivor.id)
+    .filter((building) => building.instanceId !== survivor.instanceId)
     .sort((first, second) => first.level - second.level || first.instanceId - second.instanceId)[0] ?? null;
 }
 
@@ -566,39 +834,6 @@ function canMergeBuilding(buildingId) {
     && buildingsById(buildingId).some((placedBuilding) => placedBuilding.level < 3);
 }
 
-function completedRewardPoints(player) {
-  const rowPoints = Array.from(player.completedRows).reduce((total, row) => total + rowRewardValues[row], 0);
-  return rowPoints + player.completedCols.size * columnRewardValue;
-}
-
-function isRowComplete(row) {
-  return Array.from({ length: cols }, (_, col) => buildingAt(row, col))
-    .every(Boolean);
-}
-
-function isColumnComplete(col) {
-  return Array.from({ length: rows }, (_, row) => buildingAt(row, col))
-    .every(Boolean);
-}
-
-function checkCompletionRewards() {
-  const player = activePlayer();
-  for (let row = 0; row < rows; row += 1) {
-    if (!player.completedRows.has(row) && isRowComplete(row)) {
-      player.completedRows.add(row);
-      game.vp += rowRewardValues[row];
-      addLog(`${player.name}: riga ${row + 1} completata, +${rowRewardValues[row]} PV`);
-    }
-  }
-  for (let col = 0; col < cols; col += 1) {
-    if (!player.completedCols.has(col) && isColumnComplete(col)) {
-      player.completedCols.add(col);
-      game.vp += columnRewardValue;
-      addLog(`${player.name}: colonna ${col + 1} completata, +${columnRewardValue} PV`);
-    }
-  }
-}
-
 function previewError() {
   if (game.selected?.mode === "forest") {
     if (!game.selected.preview) return "Scegli un Bosco";
@@ -606,13 +841,14 @@ function previewError() {
     return game.forests.has(key) ? "" : "Scegli una casella Bosco";
   }
   if (game.selected?.mode === "merge") {
-    if (!game.selected.preview) return "Scegli un edificio uguale";
+    if (!game.selected.preview) return "Scegli l'edificio da upgradare";
     const target = buildingAt(game.selected.preview.row, game.selected.preview.col);
     if (!target) return "Scegli un edificio gia piazzato";
     if (target.id === "muraglia") return "La Muraglia non puo fare Merge";
     if (target.id !== game.selected.buildingId) return "Scegli un edificio dello stesso tipo";
     if (buildingsById(target.id).length < 2) return `Servono due ${target.name} gia in plancia`;
-    if (!upgradeSurvivorForRemoved(target)) return "L'altro edificio uguale e gia al livello massimo";
+    if (target.level >= 3) return `${target.name} e gia al livello massimo`;
+    if (!mergeRemovalForSurvivor(target)) return `Serve un altro ${target.name} da rimuovere`;
     return "";
   }
   if (game.selected?.mode === "destroy") {
@@ -630,14 +866,50 @@ function renderStats() {
   playerValue.textContent = player.name;
   prosperityValue.textContent = game.prosperity;
   vpValue.textContent = game.vp;
-  starValue.textContent = completedRewardPoints(player);
+  objectiveValue.textContent = `+${player.objectiveVp}`;
   destroyedValue.textContent = `-${player.destroyedBuildings}`;
-  forestValue.textContent = game.forests.size;
+  forestValue.textContent = player.forestsRemoved;
+  killValue.textContent = player.monstersKilled;
+  rowValue.textContent = completedRowCount(player);
+  mergeValue.textContent = player.mergesMade;
   hitValue.textContent = game.pendingEffects.filter((effect) => effect.type === "hit").length;
   pushValue.textContent = game.pendingEffects.filter((effect) => effect.type === "push").length;
   cutValue.textContent = game.pendingForestRemovals;
-  levelValue.textContent = game.pendingLevelUps;
+  levelValue.textContent = player.finalReached ? `${player.specialStep}/${specialTrackLength}` : "-";
   diceValue.textContent = game.lastAttackRolls.length ? game.lastAttackRolls.join(" ") : "-";
+}
+
+function renderObjectives() {
+  const player = activePlayer();
+  objectivesPanel.innerHTML = game.activeObjectives.map((objective) => {
+    const value = objective.getValue(player);
+    const alreadyClaimed = player.claimedObjectives[objective.id];
+    const levels = objective.thresholds.map((threshold, levelIndex) => {
+      const ownerId = objective.claimed[levelIndex];
+      const owner = ownerId ? game.players.find((item) => item.id === ownerId) : null;
+      const points = objectiveRewards[levelIndex];
+      const canClaim = canClaimObjective(objective, levelIndex, player)
+        && player.type === "human"
+        && player.actionDone
+        && !hasPendingChoices(player);
+      return `
+        <div class="objective-level ${owner ? "claimed" : ""} ${canClaim ? "claimable" : ""}">
+          <span>${threshold} ${objective.statLabel}</span>
+          <strong>${points} PV</strong>
+          ${owner ? `<em>${escapeHtml(owner.name)}</em>` : canClaim ? `<button type="button" data-claim-objective="${objective.id}" data-claim-level="${levelIndex}">Reclama</button>` : "<em>Libero</em>"}
+        </div>
+      `;
+    }).join("");
+    return `
+      <article class="objective-card ${alreadyClaimed ? "locked" : ""}">
+        <header>
+          <strong>${objective.name}</strong>
+          <span>${value} ora${alreadyClaimed ? ` | preso +${alreadyClaimed.points}` : ""}</span>
+        </header>
+        <div class="objective-levels">${levels}</div>
+      </article>
+    `;
+  }).join("");
 }
 
 function renderPlayerSummary() {
@@ -648,11 +920,12 @@ function renderPlayerSummary() {
     const viewed = index === game.viewPlayerIndex;
     const winner = game.over && !player.dead && player.vp === bestScore;
     const finalStatus = player.finalReached ? ` | Speciale ${player.specialStep}/${specialTrackLength}` : "";
+    const objectiveStatus = player.finalScored ? `+${player.objectiveVp} Obiettivi conteggiati` : `+${player.objectiveVp} Obiettivi`;
     return `
       <button type="button" class="player-card ${current ? "current" : ""} ${viewed ? "viewed" : ""} ${player.dead ? "dead" : ""} ${winner ? "winner" : ""}" data-view-player="${index}">
-        <strong>${player.name}${winner ? " vince" : current && !game.over ? " di turno" : ""}${viewed ? " | vista" : ""}</strong>
+        <strong>${escapeHtml(player.name)}${winner ? " vince" : current && !game.over ? " di turno" : ""}${viewed ? " | vista" : ""}</strong>
         <span>${player.dead ? "Morto" : "Vivo"}</span>
-        <em>${player.vp} PV | ${player.prosperity} Prosperita | ${completedRewardPoints(player)} Premi | -${player.destroyedBuildings} Distrutti${finalStatus}</em>
+        <em>${player.vp} PV | ${objectiveStatus} | ${player.prosperity} Prosperita | -${player.destroyedBuildings} Distrutti${finalStatus}</em>
       </button>
     `;
   }).join("");
@@ -667,17 +940,16 @@ function renderDice(values, matchedValues = []) {
 
 function renderMonstersOnBoard() {
   const player = viewedPlayer();
-  const pendingLevelOnViewed = isViewingActivePlayer() && game.pendingLevelUps > 0;
   const pendingEffectsOnViewed = isViewingActivePlayer() ? game.pendingEffects : [];
   monsterLayer.innerHTML = Object.entries(viewedEnemies()).map(([key, enemy]) => {
     const left = (enemy.colStart / cols) * 100;
     const width = (enemy.width / cols) * 100;
     const top = enemy.position <= 0 ? (-12.5 + enemy.position * 12.5) : ((enemy.position - 1) / rows) * 100;
-    const levelClass = pendingLevelOnViewed && enemy.level < 2 ? " needs-level" : "";
+    const levelClass = "";
     const targetClass = pendingEffectsOnViewed.some((effect) => effect.allowedEnemies.includes(key)) ? " can-target" : "";
     return `
       <button type="button" class="monster-token${levelClass}${targetClass}" data-level-board="${key}" style="left:${left}%; top:${top}%; width:${width}%;">
-        <span class="monster-name">${enemy.name} L${enemy.level}</span>
+        <span class="monster-name">${enemy.name}</span>
         <span class="monster-damage">Danni ${enemy.damage}</span>
         <span class="monster-dice">${renderDice(activeDice(enemy), player.lastAttackRolls)}</span>
       </button>
@@ -737,26 +1009,6 @@ function renderBoardGrid() {
     }
   }
   boardGrid.innerHTML = cells.join("");
-}
-
-function renderRewardLayers() {
-  const player = viewedPlayer();
-  columnRewardLayer.innerHTML = Array.from({ length: cols }, (_, col) => {
-    if (player.completedCols.has(col)) return "";
-    return `
-      <span class="reward-marker column-reward" style="left:${((col + 0.5) / cols) * 100}%;">
-        <span class="reward-star">★</span><strong>${columnRewardValue}</strong>
-      </span>
-    `;
-  }).join("");
-  rowRewardLayer.innerHTML = rowRewardValues.map((value, row) => {
-    if (player.completedRows.has(row)) return "";
-    return `
-      <span class="reward-marker row-reward" style="top:${((row + 0.5) / rows) * 100}%;">
-        <span class="reward-star">★</span><strong>${value}</strong>
-      </span>
-    `;
-  }).join("");
 }
 
 function shapeBounds(shape) {
@@ -874,44 +1126,34 @@ function renderProsperityTrack() {
   const maxValue = endGameThreshold.value + specialTrackLength;
   const player = activePlayer();
   const attackByValue = new Map(player.attackThresholds.map((threshold) => [threshold.value, threshold]));
-  const levelByValue = new Map(player.levelUpThresholds.map((threshold) => [threshold.value, threshold]));
-  const revenueByValue = new Map(player.revenueThresholds.map((threshold) => [threshold.value, threshold]));
   const currentSpecialValue = player.finalReached && player.specialStep > 0
     ? endGameThreshold.value + player.specialStep
     : null;
   const markup = Array.from({ length: maxValue + 1 }, (_, value) => {
     const attack = attackByValue.get(value);
-    const level = levelByValue.get(value);
-    const revenue = revenueByValue.get(value);
     const specialStep = value > endGameThreshold.value ? value - endGameThreshold.value : 0;
     const reached = specialStep ? player.specialStep >= specialStep : game.prosperity >= value;
     const current = specialStep ? currentSpecialValue === value : game.prosperity === value && !currentSpecialValue;
     const classes = ["prosperity-cell"];
     if (attack) classes.push("attack");
-    if (level) classes.push("level-up");
-    if (revenue) classes.push("revenue");
     if (specialStep) classes.push("special");
     if (value === endGameThreshold.value) classes.push("final");
     if (reached) classes.push("reached");
     if (current) classes.push("current");
-    const label = specialStep ? `${specialStep}d` : attack ? `${attack.dice}d` : level ? "LU" : revenue ? "RE" : value;
+    const label = specialStep ? `${specialStep}d` : attack ? `${attack.dice}d` : value;
     const title = attack
       ? `Prosperita ${value}: attacco da ${attack.dice} dadi`
-      : level
-        ? `Prosperita ${value}: level up mostro`
-        : revenue
-          ? `Prosperita ${value}: rendita Reggia`
-          : specialStep
-            ? `Casella speciale ${specialStep}: tira ${specialStep} dadi contro tutti gli altri`
-          : `Prosperita ${value}`;
+      : specialStep
+        ? `Casella speciale ${specialStep}: tira ${specialStep} dadi contro tutti gli altri`
+        : `Prosperita ${value}`;
     const counters = game.players
       .map((trackPlayer, index) => ({ trackPlayer, index }))
       .filter(({ trackPlayer }) => playerTrackValue(trackPlayer) === value)
       .map(({ trackPlayer, index }) => `
         <span
           class="player-track-counter player-${index + 1} ${index === game.currentPlayerIndex ? "current-player" : ""} ${index === game.viewPlayerIndex ? "view-player" : ""}"
-          title="${trackPlayer.name}">
-          ${trackPlayer.name}
+          title="${escapeHtml(trackPlayer.name)}">
+          ${escapeHtml(trackPlayer.name)}
         </span>
       `).join("");
     return `
@@ -943,6 +1185,7 @@ function pendingChoiceText(player = activePlayer()) {
   }
   if (player.pendingReactivations) return "Scegli un edificio adiacente da riattivare";
   if (player.pendingForestRemovals) return "Rimuovi un Bosco";
+  if (player.pendingAttacks.length) return "Invasione in arrivo";
   return "";
 }
 
@@ -957,12 +1200,15 @@ function clearPendingChoicesForPass(player = activePlayer()) {
   player.pendingReactivations = 0;
   player.pendingReactivationSources = [];
   player.pendingForestRemovals = 0;
+  player.reactivatedTowersThisTurn = new Set();
   if (skipped.length) addLog(`${player.name}: effetti non usati scartati (${skipped.join(", ")})`);
 }
 
 function renderSelectedTool() {
+  returnToMenu.hidden = !game.over;
+  abandonGame.hidden = game.over;
   if (game.over) {
-    selectedTool.textContent = "Partita finita";
+    selectedTool.textContent = "Partita finita: puoi tornare al menu";
     confirmPlacement.disabled = true;
     destroyBuilding.disabled = true;
     passTurn.disabled = true;
@@ -970,8 +1216,8 @@ function renderSelectedTool() {
   }
   const player = activePlayer();
   const pendingText = pendingChoiceText(player);
-  passTurn.disabled = Boolean(game.selected) || !player.actionDone;
-  destroyBuilding.disabled = activePlayer().type === "bot" || activePlayer().finalReached || Boolean(game.selected) || game.pendingEffects.length > 0 || game.pendingReactivations > 0 || game.pendingForestRemovals > 0 || game.pendingLevelUps > 0;
+  passTurn.disabled = Boolean(game.selected) || !player.actionDone || player.pendingAttacks.length > 0 || game.attackRunning;
+  destroyBuilding.disabled = activePlayer().type === "bot" || activePlayer().finalReached || Boolean(game.selected) || game.pendingEffects.length > 0 || game.pendingReactivations > 0 || game.pendingForestRemovals > 0 || game.pendingLevelUps > 0 || player.pendingAttacks.length > 0 || game.attackRunning;
   if (!game.selected) {
     selectedTool.textContent = pendingText
       ? `Da risolvere: ${pendingText}. Puoi premere Passa per saltarlo`
@@ -985,7 +1231,7 @@ function renderSelectedTool() {
   }
   const building = getBuilding(game.selected.buildingId);
   const error = previewError();
-  const action = game.selected.mode === "merge" ? "Quale edificio rimuovere" : game.selected.mode === "destroy" ? "Distruggi edificio" : "Piazza";
+  const action = game.selected.mode === "merge" ? "Upgrade edificio" : game.selected.mode === "destroy" ? "Distruggi edificio" : "Piazza";
   selectedTool.textContent = game.selected.preview
     ? `${action}${building ? ` ${building.name}` : ""}: ${error || "preview valida, conferma"}`
     : `${action}${building ? ` ${building.name}` : ""}: clicca una casella`;
@@ -996,14 +1242,15 @@ function renderAll() {
   renderStats();
   renderMonstersOnBoard();
   renderBoardGrid();
-  renderRewardLayers();
   renderMarket();
   renderProsperityTrack();
   renderTiles();
   renderPlayerSummary();
+  renderObjectives();
   renderBoardZoom();
   renderSelectedTool();
   renderSetup();
+  schedulePendingAttackIfNeeded();
   scheduleSpecialIfNeeded();
   scheduleBotIfNeeded();
 }
@@ -1071,7 +1318,9 @@ function areAdjacentCells(firstCells, secondCells) {
 
 function applyPlacedBuildingEffect(building, cells, instance, reactivation = false) {
   if (building.id === "reggia") {
-    addLog(`${reactivation ? "Riattiva Reggia" : "Reggia"}: L1 vale 1 PV a ogni Rendita, L2 vale 3 PV`);
+    game.vp += 2;
+    activePlayer().fortressVp += 2;
+    addLog(`${reactivation ? "Riattiva Reggia" : "Reggia"}: +2 PV`);
   } else if (building.id === "segheria") {
     game.pendingForestRemovals += 3;
     addLog(`${reactivation ? "Riattiva Segheria" : "Segheria"}: 3 rimozioni Bosco disponibili`);
@@ -1080,16 +1329,23 @@ function applyPlacedBuildingEffect(building, cells, instance, reactivation = fal
     addLog(`${reactivation ? "Riattiva Capanna del boscaiolo" : "Capanna del boscaiolo"}: 1 rimozione Bosco disponibile`);
   } else if (building.id === "caserma") {
     queueTargetEffects("hit", 1, reactivation ? "Riattiva Caserma" : "Caserma", cells);
+  } else if (building.id === "casaArciere") {
+    queueTargetEffects("hit", 1, reactivation ? "Riattiva Casa dell'arciere" : "Casa dell'arciere", cells);
   } else if (building.id === "cannoni") {
     queueTargetEffects("hit", 2, reactivation ? "Riattiva Cannoni" : "Cannoni", cells);
   } else if (building.id === "cavalleria") {
     queueTargetEffects("push", 2, reactivation ? "Riattiva Cavalleria" : "Cavalleria", cells);
   } else if (building.id === "casaCavaliere") {
     queueTargetEffects("push", 1, reactivation ? "Riattiva Casa del cavaliere" : "Casa del cavaliere", cells);
-  } else if (building.id === "torre" && !reactivation) {
+  } else if (building.id === "torre") {
+    if (activePlayer().reactivatedTowersThisTurn.has(instance.instanceId)) {
+      addLog(`${reactivation ? "Riattiva Torre" : "Torre"}: questa Torre ha gia generato una riattivazione in questo turno`);
+      return;
+    }
+    activePlayer().reactivatedTowersThisTurn.add(instance.instanceId);
     game.pendingReactivations += 1;
     game.pendingReactivationSources.push({ instanceId: instance.instanceId, cells });
-    addLog("Torre: clicca un singolo edificio adiacente da riattivare");
+    addLog(`${reactivation ? "Riattiva Torre" : "Torre"}: clicca un singolo edificio adiacente da riattivare`);
   } else if (building.id === "muraglia") {
     addLog("Muraglia piazzata: se un mostro la raggiunge, viene rimossa senza penalita");
   }
@@ -1100,8 +1356,8 @@ function resolveProsperityTriggers(previousProsperity) {
   player.attackThresholds.forEach((threshold) => {
     if (!threshold.resolved && previousProsperity < threshold.value && game.prosperity >= threshold.value) {
       threshold.resolved = true;
-      addLog(`Soglia Prosperita ${threshold.value}: Attacco da ${threshold.dice} dadi`);
-      resolveAttack(threshold.dice);
+      player.pendingAttacks.push({ dice: threshold.dice, threshold: threshold.value });
+      addLog(`Soglia Prosperita ${threshold.value}: invasione da ${threshold.dice} dadi a fine turno`);
     }
   });
 
@@ -1114,25 +1370,15 @@ function resolveProsperityTriggers(previousProsperity) {
     }
   });
 
-  player.revenueThresholds.forEach((threshold) => {
-    if (!threshold.resolved && previousProsperity < threshold.value && game.prosperity >= threshold.value) {
-      threshold.resolved = true;
-      const palaceValue = game.buildingsOnBoard
-        .filter((building) => building.id === "reggia")
-        .reduce((total, building) => total + (building.level >= 2 ? 3 : 1), 0);
-      game.vp += palaceValue;
-      addLog(`Rendita ${threshold.value}: ${palaceValue} PV dalle Reggie`);
-    }
-  });
-
   if (!player.endGameResolved && previousProsperity < endGameThreshold.value && game.prosperity >= endGameThreshold.value) {
     player.endGameResolved = true;
     player.finalReached = true;
     player.specialStep = 0;
-    addLog(`${player.name} raggiunge la casella 34: dal prossimo turno avanza sulle caselle speciali`);
-    if (livePlayersReachedFinal()) {
-      endGame("tutti i giocatori in gioco hanno raggiunto la casella 34");
+    if (player.pendingAttacks.length) {
+      player.pendingAttacks = [];
+      addLog(`${player.name} e a 34: eventuali invasioni in coda non si applicano`);
     }
+    addLog(`${player.name} raggiunge la casella 34: dal prossimo turno avanza sulle caselle speciali`);
   }
 }
 
@@ -1140,10 +1386,52 @@ function hasPendingChoices(player = activePlayer()) {
   return Boolean(
     game.selected
     || player.pendingEffects.length
+    || player.pendingAttacks.length
     || player.pendingReactivations
     || player.pendingForestRemovals
     || player.pendingLevelUps
   );
+}
+
+function hasPendingBuildingEffects(player = activePlayer()) {
+  return Boolean(
+    game.selected
+    || player.pendingEffects.length
+    || player.pendingReactivations
+    || player.pendingForestRemovals
+    || player.pendingLevelUps
+  );
+}
+
+function schedulePendingAttackIfNeeded() {
+  const player = activePlayer();
+  if (
+    !game.started
+    || game.attackRunning
+    || game.over
+    || !player
+    || player.dead
+    || !canReceiveInvasion(player)
+    || !player.actionDone
+    || !player.pendingAttacks.length
+    || hasPendingBuildingEffects(player)
+  ) return;
+  game.attackRunning = true;
+  window.setTimeout(runPendingAttack, 350);
+}
+
+function runPendingAttack() {
+  const player = activePlayer();
+  if (!game.started || game.over || !player || player.dead || !player.pendingAttacks.length || hasPendingBuildingEffects(player)) {
+    game.attackRunning = false;
+    renderAll();
+    return;
+  }
+  const attack = player.pendingAttacks.shift();
+  addLog(`${player.name}: risolve invasione soglia ${attack.threshold}`);
+  resolveAttack(attack.dice, null, false, "Invasione");
+  game.attackRunning = false;
+  renderAll();
 }
 
 function finishTurnIfReady() {
@@ -1164,7 +1452,14 @@ function advanceTurn() {
     return;
   }
   clearPendingChoicesForPass(player);
+  if (player.pendingAttacks.length) {
+    addLog(`${player.name}: prima si risolve l'invasione di fine turno`);
+    renderAll();
+    return;
+  }
   player.actionDone = false;
+  player.objectiveClaimedThisTurn = false;
+  player.reactivatedTowersThisTurn = new Set();
   if (game.mode === "solo") {
     if (livePlayersReachedFinal()) {
       endGame("giocatore arrivato alla casella 34");
@@ -1225,7 +1520,7 @@ function livePlayersCompletedSpecials() {
 
 function scheduleSpecialIfNeeded() {
   const player = activePlayer();
-  if (game.specialRunning || game.over || !player || player.dead || !player.finalReached || player.actionDone || hasPendingChoices(player)) return;
+  if (!game.started || game.specialRunning || game.over || !player || player.dead || !player.finalReached || player.actionDone || hasPendingChoices(player)) return;
   if (player.specialStep >= specialTrackLength) {
     player.actionDone = true;
     if (livePlayersCompletedSpecials()) endGame("tutti i giocatori vivi hanno completato le caselle speciali");
@@ -1237,7 +1532,7 @@ function scheduleSpecialIfNeeded() {
 
 function runSpecialStep() {
   const attacker = activePlayer();
-  if (game.over || !attacker || attacker.dead || !attacker.finalReached || attacker.actionDone || hasPendingChoices(attacker)) {
+  if (!game.started || game.over || !attacker || attacker.dead || !attacker.finalReached || attacker.actionDone || hasPendingChoices(attacker)) {
     game.specialRunning = false;
     renderAll();
     return;
@@ -1247,8 +1542,15 @@ function runSpecialStep() {
   const rolls = Array.from({ length: diceCount }, rollDie);
   attacker.lastAttackRolls = rolls;
   addLog(`${attacker.name}: casella speciale ${attacker.specialStep}/${specialTrackLength}, dadi ${rolls.join(", ")}`);
-  game.players.forEach((player, index) => {
-    if (index === game.currentPlayerIndex || player.dead) return;
+  const targetIndexes = game.players
+    .map((player, index) => ({ player, index }))
+    .filter(({ player, index }) => index !== game.currentPlayerIndex && canReceiveInvasion(player))
+    .map(({ index }) => index);
+  if (!targetIndexes.length) {
+    addLog("Nessun avversario sotto 34: il tiro non colpisce nessuno");
+  }
+  targetIndexes.forEach((index) => {
+    const player = game.players[index];
     withActivePlayer(index, () => resolveAttack(diceCount, rolls, false, `Speciale di ${attacker.name} su ${player.name}`));
   });
   attacker.actionDone = true;
@@ -1263,10 +1565,11 @@ function runSpecialStep() {
 function scoreFinalPenalties() {
   game.players.forEach((player) => {
     if (player.dead || player.finalScored) return;
+    const objectiveBonus = totalObjectiveVp(player);
     const destroyedPenalty = player.destroyedBuildings;
-    player.vp -= destroyedPenalty;
+    player.vp += objectiveBonus - destroyedPenalty;
     player.finalScored = true;
-    addLog(`${player.name}: -${destroyedPenalty} PV per edifici distrutti`);
+    addLog(`${player.name}: +${objectiveBonus} PV obiettivi, -${destroyedPenalty} PV per edifici distrutti`);
   });
 }
 
@@ -1275,6 +1578,7 @@ function endGame(reason) {
   game.over = true;
   game.selected = null;
   scoreFinalPenalties();
+  saveGameRecords(reason);
   const contenders = game.players.filter((player) => !player.dead);
   if (!contenders.length) {
     addLog(`Fine partita: ${reason}. Nessun giocatore sopravvive`);
@@ -1309,11 +1613,9 @@ function bestEnemyForEffect(effect) {
 function bestForestCell() {
   return Array.from(game.forests).map((key) => {
     const [row, col] = key.split(",").map(Number);
-    const rowPotential = activePlayer().completedRows.has(row) ? 0 : rowRewardValues[row];
-    const colPotential = activePlayer().completedCols.has(col) ? 0 : columnRewardValue;
     const nearbyBuildings = [[row - 1, col], [row + 1, col], [row, col - 1], [row, col + 1]]
       .filter(([nextRow, nextCol]) => buildingAt(nextRow, nextCol)).length;
-    return { row, col, score: rowPotential + colPotential + nearbyBuildings * 2 + row };
+    return { row, col, score: nearbyBuildings * 2 + row };
   }).sort((first, second) => second.score - first.score)[0] ?? null;
 }
 
@@ -1331,24 +1633,12 @@ function allValidPlacements(buildingId) {
 function scorePlacement(building, cells) {
   const enemyKeys = enemiesForCells(cells);
   const pressure = enemyKeys.reduce((total, key) => total + enemyPressure(currentEnemies()[key]), 0);
-  const rowsTouched = new Set(cells.map(([row]) => row));
-  const colsTouched = new Set(cells.map(([, col]) => col));
-  const rewardPotential = Array.from(rowsTouched).reduce((total, row) => {
-    if (activePlayer().completedRows.has(row)) return total;
-    const filled = Array.from({ length: cols }, (_, col) => buildingAt(row, col)).filter(Boolean).length;
-    const added = cells.filter(([cellRow]) => cellRow === row).length;
-    return total + (filled + added >= cols ? rowRewardValues[row] * 14 : (filled + added) * rowRewardValues[row] * 0.7);
-  }, 0) + Array.from(colsTouched).reduce((total, col) => {
-    if (activePlayer().completedCols.has(col)) return total;
-    const filled = Array.from({ length: rows }, (_, row) => buildingAt(row, col)).filter(Boolean).length;
-    const added = cells.filter(([, cellCol]) => cellCol === col).length;
-    return total + (filled + added >= rows ? columnRewardValue * 14 : (filled + added) * columnRewardValue * 0.45);
-  }, 0);
-  let score = rewardPotential + cells.reduce((total, [row]) => total + row * 0.08, 0);
+  let score = cells.reduce((total, [row]) => total + row * 0.08, 0);
   if (building.id === "reggia") score += 6;
   if (building.id === "segheria") score += game.forests.size > 8 ? 7 : 3;
   if (building.id === "capanna") score += game.forests.size ? 5 : -8;
   if (building.id === "caserma") score += pressure * 1.6;
+  if (building.id === "casaArciere") score += pressure * 1.45;
   if (building.id === "cannoni") score += pressure * 2.1;
   if (building.id === "cavalleria") score += pressure * 1.9;
   if (building.id === "casaCavaliere") score += pressure * 1.4;
@@ -1357,7 +1647,7 @@ function scorePlacement(building, cells) {
     [[row - 1, col], [row + 1, col], [row, col - 1], [row, col + 1]]
       .some(([nextRow, nextCol]) => {
         const neighbor = buildingAt(nextRow, nextCol);
-        return neighbor && neighbor.id !== "torre";
+        return neighbor;
       })
   )) ? 7 : 1;
   return score;
@@ -1445,7 +1735,7 @@ function performBotStep() {
   if (game.pendingReactivations > 0) {
     const source = game.pendingReactivationSources[0];
     const target = game.buildingsOnBoard.find((building) => (
-      building.id !== "torre" && areAdjacentCells(source.cells, building.cells)
+      building.instanceId !== source.instanceId && areAdjacentCells(source.cells, building.cells)
     ));
     if (target) reactivateBuildingAt(target.cells[0][0], target.cells[0][1]);
     else {
@@ -1455,7 +1745,13 @@ function performBotStep() {
     }
     return;
   }
+  if (player.pendingAttacks.length) return;
   if (player.actionDone) {
+    const claim = bestObjectiveClaim(player);
+    if (claim) {
+      claimObjective(claim.objective.id, claim.levelIndex);
+      return;
+    }
     advanceTurn();
     return;
   }
@@ -1485,7 +1781,7 @@ function performBotStep() {
 
 function runBotStep() {
   const player = activePlayer();
-  if (game.over || !player || player.type !== "bot" || player.dead) {
+  if (!game.started || game.over || !player || player.type !== "bot" || player.dead) {
     game.botRunning = false;
     renderAll();
     return;
@@ -1496,7 +1792,7 @@ function runBotStep() {
 
 function scheduleBotIfNeeded() {
   const player = activePlayer();
-  if (game.botRunning || game.over || !player || player.type !== "bot" || player.dead) return;
+  if (!game.started || game.botRunning || game.over || !player || player.type !== "bot" || player.dead) return;
   if (player.finalReached) {
     if (player.actionDone) window.setTimeout(advanceTurn, 250);
     return;
@@ -1536,7 +1832,7 @@ function selectMarketAction(slotIndex, mode = "build") {
   game.selected = { buildingId: slot.buildingId, mode, slotIndex, extraProsperity, preview: null };
   const building = getBuilding(slot.buildingId);
   addLog(mode === "merge"
-    ? `${building.name}: quale edificio rimuovere? L'altro fara Merge${extraProsperity ? ` (+${extraProsperity} Prosperita)` : ""}`
+    ? `${building.name}: scegli l'edificio da upgradare. L'altro verra rimosso${extraProsperity ? ` (+${extraProsperity} Prosperita)` : ""}`
     : `Selezionata ${building.name}${extraProsperity ? ` (+${extraProsperity} Prosperita)` : ""}: clicca una casella per vedere la forma`);
   renderAll();
 }
@@ -1561,7 +1857,7 @@ function selectReserveAction(buildingId, mode = "build") {
   game.viewPlayerIndex = game.currentPlayerIndex;
   game.selected = { buildingId, mode, source: "reserve", preview: null };
   addLog(mode === "merge"
-    ? `${building.name}: quale edificio rimuovere? L'altro fara Merge. Il token andra al centro quando confermi`
+    ? `${building.name}: scegli l'edificio da upgradare. L'altro verra rimosso. Il token andra al centro quando confermi`
     : `Riserva: selezionata ${building.name}. Il token andra al centro quando confermi`);
   renderAll();
 }
@@ -1603,7 +1899,6 @@ function placeBuilding(row, col) {
   game.buildingsOnBoard.push(placedBuilding);
   game.nextBuildingId += 1;
   applyPlacedBuildingEffect(building, cells, placedBuilding);
-  checkCompletionRewards();
   completeMarketAction(building);
   addLog(`Piazzato ${building.name} in riga ${row + 1}, colonna ${col + 1}`);
   game.selected = null;
@@ -1620,6 +1915,7 @@ function discardSelectedTileForForest(row, col) {
   }
   const building = getBuilding(game.selected.buildingId);
   game.forests.delete(key);
+  activePlayer().forestsRemoved += 1;
   completeMarketAction(building);
   addLog(`${building.name} scartata: rimosso Bosco in riga ${row + 1}, colonna ${col + 1}`);
   game.selected = null;
@@ -1634,7 +1930,7 @@ function previewPlacement(row, col) {
 
 function upgradeSelectedBuildingAt(row, col) {
   if (game.over) return;
-  const removedBuilding = buildingAt(row, col);
+  const survivor = buildingAt(row, col);
   const building = getBuilding(game.selected.buildingId);
   const error = previewError();
   if (error) {
@@ -1642,15 +1938,15 @@ function upgradeSelectedBuildingAt(row, col) {
     renderSelectedTool();
     return;
   }
-  const survivor = upgradeSurvivorForRemoved(removedBuilding);
+  const removedBuilding = mergeRemovalForSurvivor(survivor);
   game.buildingsOnBoard = game.buildingsOnBoard.filter((item) => item.instanceId !== removedBuilding.instanceId);
   game.pendingReactivationSources = game.pendingReactivationSources.filter((source) => source.instanceId !== removedBuilding.instanceId);
   survivor.level += 1;
   game.vp += 1;
+  activePlayer().mergesMade += 1;
   applyPlacedBuildingEffect(building, survivor.cells, survivor);
-  checkCompletionRewards();
   completeMarketAction(building);
-  addLog(`${removedBuilding.name} rimossa: ${survivor.name} sale a livello ${survivor.level}, +1 PV e effetto attivato`);
+  addLog(`${survivor.name} sale a livello ${survivor.level}: l'altro ${removedBuilding.name} viene rimosso, +1 PV e effetto attivato`);
   game.selected = null;
   finishTurnIfReady();
 }
@@ -1710,6 +2006,7 @@ function removeForestAt(row, col, consumeMarketTile = false) {
     return;
   }
   game.forests.delete(key);
+  activePlayer().forestsRemoved += 1;
   if (consumeMarketTile) {
     completeMarketAction(getBuilding(game.selected.buildingId));
     game.selected = null;
@@ -1762,6 +2059,7 @@ function advanceEnemy(key) {
 
   if (targetRow >= rows - 1) {
     game.vp -= 3;
+    activePlayer().invasionMalus += 3;
     enemy.position = 0;
     enemy.damage = 0;
     addLog(`${enemy.name} raggiunge l'ultima riga: -3 PV e riparte dalla riga 0`);
@@ -1774,6 +2072,10 @@ function advanceEnemy(key) {
 
 function resolveAttack(diceCount = 2, forcedRolls = null, shouldRender = true, label = "Attacco") {
   if (game.over) return;
+  if (!canReceiveInvasion(activePlayer())) {
+    addLog(`${activePlayer().name} e a 34 Prosperita: non subisce il tiro invasione`);
+    return;
+  }
   game.lastAttackRolls = forcedRolls ? [...forcedRolls] : Array.from({ length: diceCount }, rollDie);
   addLog(`${label}: dadi ${game.lastAttackRolls.join(", ")}`);
 
@@ -1814,6 +2116,7 @@ function applyHitToEnemy(key) {
     enemy.damage = 0;
     enemy.position = 0;
     game.vp += 1;
+    activePlayer().monstersKilled += 1;
     addLog(`${enemy.name} sconfitto: +1 PV e torna alla riga 0`);
   }
 }
@@ -1841,10 +2144,6 @@ function reactivateBuildingAt(row, col) {
   if (game.over) return false;
   const target = buildingAt(row, col);
   if (!target) return false;
-  if (target.id === "torre") {
-    addLog("La Torre non riattiva un'altra Torre in questa bozza");
-    return true;
-  }
   const sourceIndex = game.pendingReactivationSources.findIndex((source) => areAdjacentCells(source.cells, target.cells));
   if (sourceIndex < 0) {
     addLog("Seleziona un edificio adiacente alla Torre");
@@ -1858,6 +2157,12 @@ function reactivateBuildingAt(row, col) {
 }
 
 function resetGame() {
+  document.querySelectorAll("[data-player-name]").forEach((input) => {
+    const index = Number(input.dataset.playerName);
+    if ((game.playerTypes[index] ?? "human") !== "bot") {
+      game.playerNames[index] = input.value.trim();
+    }
+  });
   if (game.configuredPlayerCount === 1) {
     game.mode = "solo";
     game.playerTypes = ["human"];
@@ -1878,8 +2183,13 @@ function resetGame() {
     over: false,
     botRunning: false,
     specialRunning: false,
+    attackRunning: false,
+    activeObjectives: [],
+    recordsSaved: false,
   });
   setupMarketTrack();
+  setupObjectives();
+  showGameScreen();
 
   log.innerHTML = "";
   addLog(`${game.mode === "solo" ? "Solitario" : "Multiplayer"}: ${activePlayer().name} inizia`);
@@ -1892,6 +2202,12 @@ document.addEventListener("click", (event) => {
     game.viewPlayerIndex = Number(viewTarget.dataset.viewPlayer);
     game.selected = null;
     renderAll();
+    return;
+  }
+
+  const objectiveTarget = event.target.closest("[data-claim-objective]");
+  if (objectiveTarget) {
+    claimObjective(objectiveTarget.dataset.claimObjective, Number(objectiveTarget.dataset.claimLevel));
     return;
   }
 
@@ -1956,6 +2272,8 @@ document.querySelector("#cancelPlacement").addEventListener("click", () => {
 document.querySelector("#passTurn").addEventListener("click", advanceTurn);
 document.querySelector("#resetGame").addEventListener("click", resetGame);
 document.querySelector("#startGame").addEventListener("click", resetGame);
+returnToMenu.addEventListener("click", showStartScreen);
+abandonGame.addEventListener("click", handleAbandonGame);
 document.querySelectorAll("[data-player-count]").forEach((button) => {
   button.addEventListener("click", () => {
     const count = Number(button.dataset.playerCount);
@@ -1964,8 +2282,14 @@ document.querySelectorAll("[data-player-count]").forEach((button) => {
     game.playerTypes = Array.from({ length: count }, (_, index) => (
       count === 1 ? "human" : game.playerTypes[index] ?? (index === 0 ? "human" : "bot")
     ));
+    game.playerNames = Array.from({ length: count }, (_, index) => game.playerNames[index] ?? `G${index + 1}`);
     renderSetup();
   });
+});
+playerSetup.addEventListener("input", (event) => {
+  const input = event.target.closest("[data-player-name]");
+  if (!input) return;
+  game.playerNames[Number(input.dataset.playerName)] = input.value;
 });
 playerSetup.addEventListener("change", (event) => {
   const select = event.target.closest("[data-player-type]");
@@ -1976,14 +2300,18 @@ playerSetup.addEventListener("change", (event) => {
 document.querySelector("#clearLog").addEventListener("click", () => {
   log.innerHTML = "";
 });
+clearRecords.addEventListener("click", () => {
+  localStorage.removeItem("fortressMergeRecords");
+  renderHighscores();
+});
 
 document.querySelectorAll("[data-zoom]").forEach((button) => {
   button.addEventListener("click", () => {
     const direction = button.dataset.zoom;
     const target = button.dataset.zoomTarget;
-    zooms[target] = direction === "in" ? Math.min(180, zooms[target] + 10) : Math.max(60, zooms[target] - 10);
+    zooms[target] = direction === "in" ? Math.min(180, zooms[target] + 10) : Math.max(40, zooms[target] - 10);
     renderBoardZoom();
   });
 });
 
-resetGame();
+showStartScreen();

@@ -7,23 +7,38 @@
     <link rel="stylesheet" href="styles.css">
   </head>
   <body>
-    <main class="app-shell">
-      <section class="play-area" aria-label="Area partita">
-        <section class="setup-panel" aria-label="Setup partita">
+    <section id="startScreen" class="start-screen" aria-label="Menu iniziale">
+      <div class="cover-panel">
+        <img src="COVER.png" alt="Fortress Merge">
+      </div>
+      <div class="start-panel">
+        <div>
+          <p class="eyebrow">Fortress Merge</p>
+          <h1>Nuova partita</h1>
+        </div>
+        <div class="mode-buttons" aria-label="Scelta modalita">
+          <button type="button" data-player-count="1">Solitario</button>
+          <button type="button" data-player-count="2">2 giocatori</button>
+          <button type="button" data-player-count="3">3 giocatori</button>
+          <button type="button" data-player-count="4">4 giocatori</button>
+        </div>
+        <div id="playerSetup" class="player-setup" aria-label="Tipo giocatori"></div>
+        <button type="button" id="startGame" class="start-game-button">Inizia partita</button>
+      </div>
+      <section class="records-panel" aria-label="Registro partite">
+        <div class="log-header">
           <div>
-            <p class="eyebrow">Setup</p>
-            <h2>Modalita partita</h2>
+            <p class="eyebrow">Registro partite</p>
+            <h2>Highscore</h2>
           </div>
-          <div class="mode-buttons" aria-label="Scelta modalita">
-            <button type="button" data-player-count="1">Solitario</button>
-            <button type="button" data-player-count="2">2 giocatori</button>
-            <button type="button" data-player-count="3">3 giocatori</button>
-            <button type="button" data-player-count="4">4 giocatori</button>
-          </div>
-          <div id="playerSetup" class="player-setup" aria-label="Tipo giocatori"></div>
-          <button type="button" id="startGame">Inizia partita</button>
-        </section>
+          <button type="button" id="clearRecords">Pulisci</button>
+        </div>
+        <div id="highscoreList" class="highscore-list"></div>
+      </section>
+    </section>
 
+    <main id="gameScreen" class="app-shell is-hidden">
+      <section class="play-area" aria-label="Area partita">
         <header class="topbar">
           <div>
             <p class="eyebrow">Fortress Merge</p>
@@ -34,13 +49,16 @@
             <div class="stat"><span>Giocatore</span><strong id="playerValue">G1</strong></div>
             <div class="stat"><span>Prosperita</span><strong id="prosperityValue">0</strong></div>
             <div class="stat"><span>PV</span><strong id="vpValue">0</strong></div>
-            <div class="stat"><span>Premi</span><strong id="starValue">0</strong></div>
+            <div class="stat"><span>Obiettivi</span><strong id="objectiveValue">0</strong></div>
             <div class="stat"><span>Distrutti</span><strong id="destroyedValue">0</strong></div>
-            <div class="stat"><span>Boschi</span><strong id="forestValue">12</strong></div>
+            <div class="stat"><span>Boschi tagliati</span><strong id="forestValue">0</strong></div>
+            <div class="stat"><span>Mostri uccisi</span><strong id="killValue">0</strong></div>
+            <div class="stat"><span>Righe complete</span><strong id="rowValue">0</strong></div>
+            <div class="stat"><span>Merge</span><strong id="mergeValue">0</strong></div>
             <div class="stat"><span>Colpi</span><strong id="hitValue">0</strong></div>
             <div class="stat"><span>Respingi</span><strong id="pushValue">0</strong></div>
             <div class="stat"><span>Tagli</span><strong id="cutValue">0</strong></div>
-            <div class="stat"><span>Level Up</span><strong id="levelValue">0</strong></div>
+            <div class="stat"><span>Speciale</span><strong id="levelValue">-</strong></div>
             <div class="stat"><span>Dadi attacco</span><strong id="diceValue">-</strong></div>
           </div>
         </header>
@@ -69,8 +87,6 @@
           </div>
           <div class="board-frame personal-frame">
             <div id="personalStage" class="personal-stage">
-              <div id="columnRewardLayer" class="column-reward-layer" aria-hidden="true"></div>
-              <div id="rowRewardLayer" class="row-reward-layer" aria-hidden="true"></div>
               <div id="boardGrid" class="board-grid" aria-label="Griglia plancia personale"></div>
               <div id="monsterLayer" class="monster-layer" aria-hidden="true"></div>
             </div>
@@ -124,6 +140,11 @@
           <div id="playerSummary" class="player-summary" aria-label="Riepilogo giocatori"></div>
         </section>
 
+        <section class="rules-panel" aria-label="Obiettivi partita">
+          <p class="eyebrow">Obiettivi</p>
+          <div id="objectivesPanel" class="objectives-panel" aria-label="Obiettivi visibili"></div>
+        </section>
+
         <section class="log-panel" aria-label="Registro partita">
           <div class="log-header">
             <p class="eyebrow">Log</p>
@@ -132,7 +153,11 @@
           <ol id="eventLog"></ol>
         </section>
 
-        <button type="button" id="resetGame" class="reset-button">Reset partita</button>
+        <div class="side-actions">
+          <button type="button" id="returnToMenu" class="menu-button" hidden>Torna al menu</button>
+          <button type="button" id="abandonGame" class="abandon-button">Abbandona</button>
+          <button type="button" id="resetGame" class="reset-button">Reset partita</button>
+        </div>
       </aside>
     </main>
 
