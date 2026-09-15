@@ -22,6 +22,14 @@
           <button type="button" data-player-count="3">3 giocatori</button>
           <button type="button" data-player-count="4">4 giocatori</button>
         </div>
+        <div class="rule-mode-panel" aria-label="Regolamento mostri">
+          <span>Regolamento mostri</span>
+          <div class="rule-mode-buttons">
+            <button type="button" data-monster-mode="square">Tessere quadrate</button>
+            <button type="button" data-monster-mode="round1">Tonde 1 vita</button>
+            <button type="button" data-monster-mode="round2">Tonde 2 vite</button>
+          </div>
+        </div>
         <div id="playerSetup" class="player-setup" aria-label="Tipo giocatori"></div>
         <button type="button" id="startGame" class="start-game-button">Inizia partita</button>
       </div>
@@ -80,6 +88,7 @@
               <span>Selezione</span>
               <strong id="selectedTool">Nessuna tessera</strong>
             </div>
+            <div id="choiceActions" class="choice-actions" aria-label="Scelta effetto"></div>
             <button type="button" id="confirmPlacement" disabled>Conferma</button>
             <button type="button" id="destroyBuilding" disabled>Distruggi</button>
             <button type="button" id="passTurn" disabled>Passa</button>
@@ -99,7 +108,7 @@
               <p class="eyebrow">Mercato</p>
               <h2>15 tessere + token acquisto</h2>
             </div>
-            <div id="deckInfo" class="deck-info">Pool: 20</div>
+            <div id="deckInfo" class="deck-info">Tracciato statico</div>
           </div>
           <div class="market-track-wrap">
             <div id="marketTrack" class="market-track" aria-label="Tracciato mercato"></div>

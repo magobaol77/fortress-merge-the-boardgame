@@ -213,6 +213,7 @@ h2 {
 }
 
 .mode-buttons,
+.rule-mode-panel,
 .player-setup {
   display: grid;
   gap: 8px;
@@ -232,6 +233,40 @@ h2 {
   border-color: rgba(126, 176, 123, .95);
   background: linear-gradient(180deg, #3f5f35, #273f24);
   color: #e9ffe5;
+}
+
+.rule-mode-panel {
+  gap: 6px;
+}
+
+.rule-mode-panel > span {
+  color: var(--muted);
+  font-size: .76rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.rule-mode-buttons {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.rule-mode-buttons button {
+  min-height: 36px;
+  padding: 0 8px;
+  font-size: .78rem;
+}
+
+.rule-mode-buttons button.selected {
+  border-color: rgba(126, 176, 123, .95);
+  background: linear-gradient(180deg, #3f5f35, #273f24);
+  color: #e9ffe5;
+}
+
+.rule-mode-buttons button:disabled {
+  opacity: .45;
+  cursor: not-allowed;
 }
 
 .player-setup {
@@ -373,7 +408,7 @@ h2 {
 
 .placement-toolbar {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 104px 96px 88px 88px;
+  grid-template-columns: minmax(0, 1fr) minmax(210px, auto) 104px 96px 88px 88px;
   gap: 8px;
   align-items: center;
   margin-top: 8px;
@@ -399,6 +434,23 @@ h2 {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.choice-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  min-height: 40px;
+}
+
+.choice-actions:empty {
+  display: none;
+}
+
+.choice-actions button {
+  min-height: 30px;
+  padding: 0 8px;
+  font-size: .74rem;
 }
 
 #passTurn:not(:disabled) {
@@ -437,9 +489,9 @@ h2 {
 .market-track-wrap {
   position: relative;
   display: grid;
-  grid-template-columns: 118px minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) 118px;
-  grid-template-rows: 118px 150px 150px 150px 118px;
-  gap: 10px;
+  grid-template-columns: repeat(9, minmax(72px, 1fr));
+  grid-template-rows: repeat(7, minmax(92px, auto));
+  gap: 8px;
   margin-top: 12px;
 }
 
@@ -448,8 +500,8 @@ h2 {
 }
 
 .market-center {
-  grid-column: 2 / 5;
-  grid-row: 2 / 5;
+  grid-column: 2 / 9;
+  grid-row: 2 / 7;
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(185px, 230px);
   align-items: start;
@@ -690,6 +742,27 @@ h2 {
 .market-slot.selected {
   border-color: var(--green);
   box-shadow: 0 0 0 3px rgba(126, 176, 123, .36);
+}
+
+.market-slot.has-token {
+  border-color: rgba(126, 176, 123, .95);
+  box-shadow: inset 0 0 0 2px rgba(126, 176, 123, .34);
+}
+
+.market-token-marker {
+  display: grid;
+  place-items: center;
+  min-height: 30px;
+  border-radius: 6px;
+  background: linear-gradient(180deg, #28422b, #172819);
+  color: #e9ffe5;
+  font-size: .7rem;
+  font-weight: 950;
+  text-align: center;
+}
+
+.market-token-marker strong {
+  color: var(--accent-strong);
 }
 
 .market-slot.token {
@@ -1004,6 +1077,35 @@ h2 {
 .monster-token .die {
   width: 24px;
   font-size: .78rem;
+}
+
+.monster-token.round-monster {
+  grid-template-columns: 1fr;
+  grid-template-rows: auto auto auto;
+  justify-items: center;
+  width: 12%;
+  aspect-ratio: 1;
+  height: auto;
+  padding: 4px;
+  border-radius: 999px;
+}
+
+.monster-token.round-monster .monster-name {
+  grid-column: auto;
+  font-size: .66rem;
+}
+
+.monster-token.round-monster .monster-damage {
+  font-size: .62rem;
+}
+
+.monster-token.round-monster .monster-dice {
+  justify-content: center;
+}
+
+.monster-token.round-monster .die {
+  width: 20px;
+  font-size: .68rem;
 }
 
 .rules-panel ul {
@@ -1322,7 +1424,8 @@ h2 {
     grid-template-columns: 1fr;
   }
 
-  .mode-buttons {
+  .mode-buttons,
+  .rule-mode-buttons {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -1331,7 +1434,8 @@ h2 {
   }
 
   .market-track-wrap {
-    grid-template-rows: repeat(5, 96px);
+    grid-template-columns: repeat(9, minmax(62px, 1fr));
+    grid-template-rows: repeat(7, 86px);
     gap: 6px;
   }
 

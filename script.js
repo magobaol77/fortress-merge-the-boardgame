@@ -9,9 +9,7 @@ const buildingShapes = {
   caserma: [[0, 0], [1, 0], [0, 1], [1, 1]],
   cavalleria: [[0, 0], [1, 0], [2, 0], [1, 1]],
   muraglia: [[0, 0], [1, 0], [2, 0]],
-  capanna: [[0, 0]],
-  casaCavaliere: [[0, 0]],
-  casaArciere: [[0, 0]],
+  cittadino: [[0, 0]],
 };
 
 const buildings = [
@@ -113,50 +111,25 @@ const buildings = [
     },
   },
   {
-    id: "capanna",
-    name: "Capanna del boscaiolo",
-    short: "BOS",
-    color: "#8fbd63",
-    shape: "Singola, 1 casella",
-    prosperity: 2,
-    effect: "Rimuovi 1 Bosco",
-    reserveOnly: true,
-    apply: () => {
-      game.pendingForestRemovals += 1;
-      addLog("Capanna del boscaiolo: 1 rimozione Bosco disponibile");
-    },
-  },
-  {
-    id: "casaCavaliere",
-    name: "Casa del cavaliere",
-    short: "CAV1",
-    color: "#4da1c8",
-    shape: "Singola, 1 casella",
-    prosperity: 2,
-    effect: "Effettua 1 Respingimento",
-    reserveOnly: true,
-    apply: () => {
-      game.pendingPushes += 1;
-      addLog("Casa del cavaliere: 1 Respingimento disponibile");
-    },
-  },
-  {
-    id: "casaArciere",
-    name: "Casa dell'arciere",
-    short: "ARC",
+    id: "cittadino",
+    name: "Casa del cittadino",
+    short: "CIT",
     color: "#c78945",
     shape: "Singola, 1 casella",
     prosperity: 3,
-    effect: "Effettua 1 Colpo",
+    effect: "Scegli: 1 Colpo, 1 Spinta o rimuovi 1 Bosco nella sua colonna",
     reserveOnly: true,
-    apply: () => {
-      game.pendingHits += 1;
-      addLog("Casa dell'arciere: 1 Colpo disponibile");
-    },
   },
 ];
 
-const reserveBuildingIds = ["capanna", "casaCavaliere", "casaArciere"];
+const reserveBuildingIds = ["cittadino"];
+
+const staticMarketBuildingIds = [
+  "cannoni", "caserma", "cavalleria", "reggia", "segheria", "muraglia", "muraglia",
+  "reggia", "segheria", "caserma", "cannoni", "cavalleria",
+  "muraglia", "reggia", "segheria", "caserma", "muraglia", "cannoni", "muraglia",
+  "cavalleria", "segheria", "caserma", "cannoni", "cavalleria",
+];
 
 const objectiveRewards = [2, 4, 6];
 const objectiveDeck = [
@@ -227,9 +200,31 @@ const enemies = {
   },
 };
 
+const monsterModes = {
+  square: {
+    label: "Mostri tessere quadrate",
+    round: false,
+    lives: 3,
+    prosperityFinish: true,
+  },
+  round1: {
+    label: "Mostri tessere tonde 1 vita",
+    round: true,
+    lives: 1,
+    prosperityFinish: false,
+  },
+  round2: {
+    label: "Mostri tessere tonde 2 vite",
+    round: true,
+    lives: 2,
+    prosperityFinish: false,
+  },
+};
+
 const game = {
   round: 1,
   mode: "solo",
+  monsterMode: "square",
   configuredPlayerCount: 1,
   playerTypes: ["human"],
   playerNames: ["G1"],
@@ -320,15 +315,15 @@ const initialForests = [
 ];
 
 const attackThresholds = [
-  { value: 5, dice: 1, resolved: false },
-  { value: 9, dice: 1, resolved: false },
-  { value: 13, dice: 2, resolved: false },
-  { value: 16, dice: 2, resolved: false },
-  { value: 19, dice: 2, resolved: false },
-  { value: 23, dice: 3, resolved: false },
-  { value: 26, dice: 3, resolved: false },
-  { value: 29, dice: 3, resolved: false },
-  { value: 33, dice: 4, resolved: false },
+  { value: 5, dice: 2, resolved: false },
+  { value: 9, dice: 2, resolved: false },
+  { value: 13, dice: 3, resolved: false },
+  { value: 16, dice: 3, resolved: false },
+  { value: 19, dice: 3, resolved: false },
+  { value: 23, dice: 4, resolved: false },
+  { value: 26, dice: 4, resolved: false },
+  { value: 29, dice: 5, resolved: false },
+  { value: 33, dice: 6, resolved: false },
 ];
 
 const levelUpThresholds = [];
@@ -352,6 +347,43 @@ function cloneEnemies() {
       diceByLevel: enemy.diceByLevel.map((dice) => [...dice]),
     },
   ]));
+}
+
+function isRoundMonsterMode(mode = game.monsterMode) {
+  return Boolean(monsterModes[mode]?.round);
+}
+
+function currentMonsterMode() {
+  return monsterModes[game.monsterMode] ?? monsterModes.square;
+}
+
+function roundMonsterColumns() {
+  return shuffle(Array.from({ length: cols }, (_, col) => col)).slice(0, 6);
+}
+
+function cloneRoundEnemies(mode = game.monsterMode) {
+  const lives = monsterModes[mode]?.lives ?? 2;
+  return Object.fromEntries(roundMonsterColumns().map((col, index) => {
+    const die = index + 1;
+    return [
+      `round${die}`,
+      {
+        name: `Mostro ${die}`,
+        colStart: col,
+        width: 1,
+        level: 1,
+        position: 1,
+        damage: 0,
+        lives,
+        die,
+        diceByLevel: [[die], [die]],
+      },
+    ];
+  }));
+}
+
+function createEnemiesForMode(mode = game.monsterMode) {
+  return isRoundMonsterMode(mode) ? cloneRoundEnemies(mode) : cloneEnemies();
 }
 
 function cloneThresholds(thresholds) {
@@ -400,6 +432,8 @@ function createPlayerState(index) {
     pendingEffects: [],
     pendingAttacks: [],
     pendingReactivationSources: [],
+    pendingCitizenChoices: [],
+    pendingForestRemovalRules: [],
     reactivatedTowersThisTurn: new Set(),
     pendingLevelUps: 0,
     lastAttackRolls: [],
@@ -407,7 +441,7 @@ function createPlayerState(index) {
     nextBuildingId: 1,
     buildingsOnBoard: [],
     forests: new Set(initialForests.map(([row, col]) => cellKey(row, col))),
-    enemies: cloneEnemies(),
+    enemies: createEnemiesForMode(game.monsterMode),
     attackThresholds: cloneThresholds(attackThresholds),
     levelUpThresholds: cloneThresholds(levelUpThresholds),
     endGameResolved: false,
@@ -438,6 +472,10 @@ function renderSetup() {
   document.querySelectorAll("[data-player-count]").forEach((button) => {
     const count = Number(button.dataset.playerCount);
     button.classList.toggle("selected", count === game.configuredPlayerCount);
+  });
+  document.querySelectorAll("[data-monster-mode]").forEach((button) => {
+    const mode = button.dataset.monsterMode;
+    button.classList.toggle("selected", mode === game.monsterMode);
   });
   playerSetup.innerHTML = Array.from({ length: game.configuredPlayerCount }, (_, index) => {
     const type = game.playerTypes[index] ?? (index === 0 ? "human" : "bot");
@@ -494,6 +532,7 @@ const personalZoomLabel = document.querySelector("#personalZoomLabel");
 const boardGrid = document.querySelector("#boardGrid");
 const monsterLayer = document.querySelector("#monsterLayer");
 const selectedTool = document.querySelector("#selectedTool");
+const choiceActions = document.querySelector("#choiceActions");
 const confirmPlacement = document.querySelector("#confirmPlacement");
 const destroyBuilding = document.querySelector("#destroyBuilding");
 const passTurn = document.querySelector("#passTurn");
@@ -520,7 +559,7 @@ function rollDie() {
 }
 
 function activeDice(enemy) {
-  return enemy.diceByLevel[enemy.level - 1];
+  return enemy.diceByLevel?.[enemy.level - 1] ?? [enemy.die].filter(Boolean);
 }
 
 function addLog(message) {
@@ -643,7 +682,7 @@ function saveGameRecords(reason) {
       id: `${now.getTime()}-${player.id}`,
       date: now.toLocaleDateString("it-IT"),
       name: player.name,
-      mode: game.mode === "solo" ? "Solitario" : `${game.configuredPlayerCount} giocatori`,
+      mode: `${game.mode === "solo" ? "Solitario" : `${game.configuredPlayerCount} giocatori`} | ${currentMonsterMode().label}`,
       type: player.type === "bot" ? "Automa" : "Giocatore",
       score: player.vp,
       dead: player.dead,
@@ -714,27 +753,21 @@ function handleAbandonGame() {
 }
 
 function createTilePool() {
-  return shuffle(buildings.filter((building) => !building.reserveOnly).flatMap((building) => (
-    Array.from({ length: 10 }, (_, copyIndex) => ({
-      tileId: `${building.id}-${copyIndex + 1}`,
-      buildingId: building.id,
-    }))
-  )));
+  return [];
 }
 
 function drawTile() {
-  return game.deck.pop() ?? null;
+  return null;
 }
 
 function setupMarketTrack() {
   game.deck = createTilePool();
-  game.marketSlots = Array.from({ length: 16 }, () => null);
+  game.marketSlots = staticMarketBuildingIds.map((buildingId, index) => ({
+    tileId: `${buildingId}-${index + 1}`,
+    buildingId,
+  }));
   game.tokenIndex = Math.floor(Math.random() * game.marketSlots.length);
   game.tokenAtCenter = false;
-  game.marketSlots[game.tokenIndex] = { type: "token" };
-  game.marketSlots.forEach((slot, index) => {
-    if (!slot) game.marketSlots[index] = drawTile();
-  });
 }
 
 function purchasableIndexes() {
@@ -743,7 +776,8 @@ function purchasableIndexes() {
 
 function isPurchasable(slotIndex) {
   const slot = game.marketSlots[slotIndex];
-  return Boolean(slot && slot.type !== "token")
+  return Boolean(slot)
+    && (game.tokenAtCenter || slotIndex !== game.tokenIndex)
     && (game.tokenAtCenter || purchasableIndexes().includes(slotIndex));
 }
 
@@ -763,8 +797,26 @@ function canChooseTileThisTurn() {
   return Boolean(player && !game.over && !player.dead && !player.finalReached && !player.actionDone && !hasPendingChoices(player));
 }
 
+function usesProsperityFinish() {
+  return currentMonsterMode().prosperityFinish;
+}
+
 function canReceiveInvasion(player) {
-  return Boolean(player && !player.dead && !player.finalReached && player.prosperity < endGameThreshold.value);
+  if (!player || player.dead) return false;
+  if (!usesProsperityFinish()) return true;
+  return Boolean(!player.finalReached && player.prosperity < endGameThreshold.value);
+}
+
+function addForestRemovals(count, allowedCols = null) {
+  const player = activePlayer();
+  player.pendingForestRemovals += count;
+  for (let i = 0; i < count; i += 1) {
+    player.pendingForestRemovalRules.push(Array.isArray(allowedCols) ? [...allowedCols] : null);
+  }
+}
+
+function currentForestRemovalRule(player = activePlayer()) {
+  return player.pendingForestRemovalRules[0] ?? null;
 }
 
 function placedCells(originRow, originCol, buildingId) {
@@ -947,10 +999,14 @@ function renderMonstersOnBoard() {
     const top = enemy.position <= 0 ? (-12.5 + enemy.position * 12.5) : ((enemy.position - 1) / rows) * 100;
     const levelClass = "";
     const targetClass = pendingEffectsOnViewed.some((effect) => effect.allowedEnemies.includes(key)) ? " can-target" : "";
+    const roundClass = isRoundMonsterMode() ? " round-monster" : "";
+    const damageLabel = isRoundMonsterMode()
+      ? (enemy.damage > 0 ? "Ferito" : "Sano")
+      : `Danni ${enemy.damage}`;
     return `
-      <button type="button" class="monster-token${levelClass}${targetClass}" data-level-board="${key}" style="left:${left}%; top:${top}%; width:${width}%;">
+      <button type="button" class="monster-token${levelClass}${targetClass}${roundClass}" data-level-board="${key}" style="left:${left}%; top:${top}%; width:${width}%;">
         <span class="monster-name">${enemy.name}</span>
-        <span class="monster-damage">Danni ${enemy.damage}</span>
+        <span class="monster-damage">${damageLabel}</span>
         <span class="monster-dice">${renderDice(activeDice(enemy), player.lastAttackRolls)}</span>
       </button>
     `;
@@ -977,6 +1033,10 @@ function renderBoardGrid() {
       }
       if (canUseViewedBoard && game.selected?.mode === "forest") {
         classes.push(forest ? "forest-target" : "blocked-target");
+      }
+      if (canUseViewedBoard && !game.selected && game.pendingForestRemovals > 0) {
+        const allowedCols = currentForestRemovalRule(player);
+        classes.push(forest && (!allowedCols || allowedCols.includes(col)) ? "forest-target" : "blocked-target");
       }
       if (canUseViewedBoard && game.selected?.mode === "merge") {
         classes.push(isUpgradeableTarget(building) ? "placeable-target" : "blocked-target");
@@ -1050,33 +1110,30 @@ function renderBuildingCard(building, market = false) {
 }
 
 const slotPositions = [
-  [1, 1], [1, 2], [1, 3], [1, 4], [1, 5],
-  [2, 5], [3, 5], [4, 5],
-  [5, 5], [5, 4], [5, 3], [5, 2], [5, 1],
-  [4, 1], [3, 1], [2, 1],
+  [1, 2], [1, 3], [1, 4], [1, 5], [1, 6], [1, 7], [1, 8],
+  [2, 9], [3, 9], [4, 9], [5, 9], [6, 9],
+  [7, 8], [7, 7], [7, 6], [7, 5], [7, 4], [7, 3], [7, 2],
+  [6, 1], [5, 1], [4, 1], [3, 1], [2, 1],
 ];
 
 function renderMarketSlot(slot, index) {
   const [gridRow, gridColumn] = slotPositions[index];
   const style = `grid-row:${gridRow}; grid-column:${gridColumn};`;
-  if (slot?.type === "token" && !game.tokenAtCenter) {
-    return `<div class="market-slot token" style="${style}"><span>Token</span><strong>Acquisto</strong><em>#${index + 1}</em></div>`;
-  }
-  if (slot?.type === "token" && game.tokenAtCenter) {
-    return `<div class="market-slot token ghost-token" style="${style}"><span>Base</span><strong>#${index + 1}</strong></div>`;
-  }
   if (!slot) {
-    return `<div class="market-slot empty" style="${style}">Pool vuoto</div>`;
+    return `<div class="market-slot empty" style="${style}">Casella vuota</div>`;
   }
 
   const building = getBuilding(slot.buildingId);
   const available = canChooseTileThisTurn() && isPurchasable(index);
   const surcharge = purchaseSurcharge(index);
   const selected = game.selected?.slotIndex === index;
+  const hasToken = !game.tokenAtCenter && index === game.tokenIndex;
   const canMerge = canMergeBuilding(building.id);
 
   return `
-    <article class="market-slot ${available ? "available" : ""} ${selected ? "selected" : ""}" style="${style}" aria-label="${available ? `Compra ${building.name}` : building.name}">
+    <article class="market-slot ${available ? "available" : ""} ${selected ? "selected" : ""} ${hasToken ? "has-token" : ""}" style="${style}" aria-label="${available ? `Compra ${building.name}` : building.name}">
+      ${hasToken ? `<div class="market-token-marker"><span>Token</span><strong>#${index + 1}</strong></div>` : ""}
+      <span class="slot-index">#${index + 1}</span>
       ${renderPolyomino(building, true)}
       <h3>${building.name}</h3>
       ${available ? `
@@ -1110,7 +1167,7 @@ function renderReserveMarket() {
 }
 
 function renderMarket() {
-  deckInfo.textContent = `Pool: ${game.deck.length} | Token: ${game.tokenAtCenter ? "Centro" : game.tokenIndex + 1}`;
+  deckInfo.textContent = `Tracciato statico | Token: ${game.tokenAtCenter ? "Centro" : game.tokenIndex + 1}`;
   marketTrack.innerHTML = game.marketSlots.map(renderMarketSlot).join("");
   renderReserveMarket();
 }
@@ -1178,6 +1235,7 @@ function renderBoardZoom() {
 
 function pendingChoiceText(player = activePlayer()) {
   if (game.selected) return "Completa o annulla la selezione";
+  if (player.pendingCitizenChoices.length) return "Scegli effetto Casa del cittadino";
   if (player.pendingLevelUps) return "Scegli un mostro per il Level Up";
   if (player.pendingEffects.length) {
     const effect = player.pendingEffects[0];
@@ -1192,14 +1250,17 @@ function pendingChoiceText(player = activePlayer()) {
 function clearPendingChoicesForPass(player = activePlayer()) {
   const skipped = [];
   if (player.pendingLevelUps) skipped.push(`${player.pendingLevelUps} Level Up`);
+  if (player.pendingCitizenChoices.length) skipped.push(`${player.pendingCitizenChoices.length} scelte cittadino`);
   if (player.pendingEffects.length) skipped.push(`${player.pendingEffects.length} effetti mostro`);
   if (player.pendingReactivations) skipped.push(`${player.pendingReactivations} riattivazioni`);
   if (player.pendingForestRemovals) skipped.push(`${player.pendingForestRemovals} rimozioni Bosco`);
   player.pendingLevelUps = 0;
+  player.pendingCitizenChoices = [];
   player.pendingEffects = [];
   player.pendingReactivations = 0;
   player.pendingReactivationSources = [];
   player.pendingForestRemovals = 0;
+  player.pendingForestRemovalRules = [];
   player.reactivatedTowersThisTurn = new Set();
   if (skipped.length) addLog(`${player.name}: effetti non usati scartati (${skipped.join(", ")})`);
 }
@@ -1207,6 +1268,14 @@ function clearPendingChoicesForPass(player = activePlayer()) {
 function renderSelectedTool() {
   returnToMenu.hidden = !game.over;
   abandonGame.hidden = game.over;
+  const citizenChoice = activePlayer()?.pendingCitizenChoices[0];
+  choiceActions.innerHTML = citizenChoice && !game.over && activePlayer().type === "human"
+    ? `
+      <button type="button" data-citizen-choice="hit">Colpo</button>
+      <button type="button" data-citizen-choice="push">Spingi</button>
+      <button type="button" data-citizen-choice="forest">Bosco</button>
+    `
+    : "";
   if (game.over) {
     selectedTool.textContent = "Partita finita: puoi tornare al menu";
     confirmPlacement.disabled = true;
@@ -1262,7 +1331,7 @@ function completeMarketAction(building) {
   game.prosperity = Math.min(endGameThreshold.value, nextProsperity);
   activePlayer().actionDone = true;
   if (surcharge) addLog(`Acquisto oltre le 3 tessere: +${surcharge} Prosperita`);
-  if (nextProsperity > endGameThreshold.value && previousProsperity < endGameThreshold.value) {
+  if (usesProsperityFinish() && nextProsperity > endGameThreshold.value && previousProsperity < endGameThreshold.value) {
     addLog(`${activePlayer().name}: Prosperita fermata a 34`);
   }
   movePurchaseTokenFromSelection();
@@ -1271,18 +1340,7 @@ function completeMarketAction(building) {
 }
 
 function applySoloMarketDiscard() {
-  if (game.mode !== "solo" || game.selected?.source === "reserve") return;
-  const candidates = [1, 2, 3]
-    .map((offset) => (game.tokenIndex + offset) % game.marketSlots.length)
-    .filter((index) => {
-      const slot = game.marketSlots[index];
-      return slot && slot.type !== "token";
-    });
-  if (!candidates.length) return;
-  const discardIndex = candidates[Math.floor(Math.random() * candidates.length)];
-  const discarded = getBuilding(game.marketSlots[discardIndex].buildingId);
-  game.marketSlots[discardIndex] = drawTile();
-  addLog(`Solitario: scartata a caso ${discarded.name} dalle prossime 3 tessere`);
+  return;
 }
 
 function enemiesForCells(cells) {
@@ -1322,21 +1380,20 @@ function applyPlacedBuildingEffect(building, cells, instance, reactivation = fal
     activePlayer().fortressVp += 2;
     addLog(`${reactivation ? "Riattiva Reggia" : "Reggia"}: +2 PV`);
   } else if (building.id === "segheria") {
-    game.pendingForestRemovals += 3;
+    addForestRemovals(3);
     addLog(`${reactivation ? "Riattiva Segheria" : "Segheria"}: 3 rimozioni Bosco disponibili`);
-  } else if (building.id === "capanna") {
-    game.pendingForestRemovals += 1;
-    addLog(`${reactivation ? "Riattiva Capanna del boscaiolo" : "Capanna del boscaiolo"}: 1 rimozione Bosco disponibile`);
+  } else if (building.id === "cittadino") {
+    activePlayer().pendingCitizenChoices.push({
+      cells,
+      sourceName: reactivation ? "Riattiva Casa del cittadino" : "Casa del cittadino",
+    });
+    addLog(`${reactivation ? "Riattiva Casa del cittadino" : "Casa del cittadino"}: scegli Colpo, Spingi o Bosco`);
   } else if (building.id === "caserma") {
     queueTargetEffects("hit", 1, reactivation ? "Riattiva Caserma" : "Caserma", cells);
-  } else if (building.id === "casaArciere") {
-    queueTargetEffects("hit", 1, reactivation ? "Riattiva Casa dell'arciere" : "Casa dell'arciere", cells);
   } else if (building.id === "cannoni") {
     queueTargetEffects("hit", 2, reactivation ? "Riattiva Cannoni" : "Cannoni", cells);
   } else if (building.id === "cavalleria") {
     queueTargetEffects("push", 2, reactivation ? "Riattiva Cavalleria" : "Cavalleria", cells);
-  } else if (building.id === "casaCavaliere") {
-    queueTargetEffects("push", 1, reactivation ? "Riattiva Casa del cavaliere" : "Casa del cavaliere", cells);
   } else if (building.id === "torre") {
     if (activePlayer().reactivatedTowersThisTurn.has(instance.instanceId)) {
       addLog(`${reactivation ? "Riattiva Torre" : "Torre"}: questa Torre ha gia generato una riattivazione in questo turno`);
@@ -1370,7 +1427,7 @@ function resolveProsperityTriggers(previousProsperity) {
     }
   });
 
-  if (!player.endGameResolved && previousProsperity < endGameThreshold.value && game.prosperity >= endGameThreshold.value) {
+  if (usesProsperityFinish() && !player.endGameResolved && previousProsperity < endGameThreshold.value && game.prosperity >= endGameThreshold.value) {
     player.endGameResolved = true;
     player.finalReached = true;
     player.specialStep = 0;
@@ -1385,6 +1442,7 @@ function resolveProsperityTriggers(previousProsperity) {
 function hasPendingChoices(player = activePlayer()) {
   return Boolean(
     game.selected
+    || player.pendingCitizenChoices.length
     || player.pendingEffects.length
     || player.pendingAttacks.length
     || player.pendingReactivations
@@ -1396,6 +1454,7 @@ function hasPendingChoices(player = activePlayer()) {
 function hasPendingBuildingEffects(player = activePlayer()) {
   return Boolean(
     game.selected
+    || player.pendingCitizenChoices.length
     || player.pendingEffects.length
     || player.pendingReactivations
     || player.pendingForestRemovals
@@ -1507,12 +1566,14 @@ function withActivePlayer(index, callback) {
 }
 
 function livePlayersReachedFinal() {
+  if (!usesProsperityFinish()) return false;
   return game.players
     .filter((player) => !player.dead)
     .every((player) => player.finalReached || player.prosperity >= endGameThreshold.value);
 }
 
 function livePlayersCompletedSpecials() {
+  if (!usesProsperityFinish()) return false;
   return game.players
     .filter((player) => !player.dead)
     .every((player) => player.finalReached && player.specialStep >= specialTrackLength);
@@ -1610,13 +1671,43 @@ function bestEnemyForEffect(effect) {
     .sort(([, first], [, second]) => enemyPressure(second) - enemyPressure(first))[0]?.[0] ?? null;
 }
 
-function bestForestCell() {
-  return Array.from(game.forests).map((key) => {
+function bestForestCell(allowedCols = null) {
+  return Array.from(game.forests).filter((key) => {
+    if (!allowedCols) return true;
+    const [, col] = key.split(",").map(Number);
+    return allowedCols.includes(col);
+  }).map((key) => {
     const [row, col] = key.split(",").map(Number);
     const nearbyBuildings = [[row - 1, col], [row + 1, col], [row, col - 1], [row, col + 1]]
       .filter(([nextRow, nextCol]) => buildingAt(nextRow, nextCol)).length;
     return { row, col, score: nearbyBuildings * 2 + row };
   }).sort((first, second) => second.score - first.score)[0] ?? null;
+}
+
+function resolveCitizenChoice(choiceType) {
+  const player = activePlayer();
+  const choice = player.pendingCitizenChoices.shift();
+  if (!choice) return;
+  if (choiceType === "hit") {
+    queueTargetEffects("hit", 1, choice.sourceName, choice.cells);
+  } else if (choiceType === "push") {
+    queueTargetEffects("push", 1, choice.sourceName, choice.cells);
+  } else if (choiceType === "forest") {
+    const allowedCols = [...new Set(choice.cells.map(([, col]) => col))];
+    addForestRemovals(1, allowedCols);
+    addLog(`${choice.sourceName}: rimuovi 1 Bosco nella colonna ${allowedCols.map((col) => col + 1).join(", ")}`);
+  }
+  finishTurnIfReady();
+}
+
+function bestCitizenChoice(choice) {
+  const enemyKeys = enemiesForCells(choice.cells);
+  const pressure = enemyKeys.reduce((total, key) => total + enemyPressure(currentEnemies()[key]), 0);
+  const colsInChoice = [...new Set(choice.cells.map(([, col]) => col))];
+  if (pressure >= 3) return "hit";
+  if (pressure > 0) return "push";
+  if (bestForestCell(colsInChoice)) return "forest";
+  return enemyKeys.length ? "hit" : "forest";
 }
 
 function allValidPlacements(buildingId) {
@@ -1636,12 +1727,13 @@ function scorePlacement(building, cells) {
   let score = cells.reduce((total, [row]) => total + row * 0.08, 0);
   if (building.id === "reggia") score += 6;
   if (building.id === "segheria") score += game.forests.size > 8 ? 7 : 3;
-  if (building.id === "capanna") score += game.forests.size ? 5 : -8;
   if (building.id === "caserma") score += pressure * 1.6;
-  if (building.id === "casaArciere") score += pressure * 1.45;
   if (building.id === "cannoni") score += pressure * 2.1;
   if (building.id === "cavalleria") score += pressure * 1.9;
-  if (building.id === "casaCavaliere") score += pressure * 1.4;
+  if (building.id === "cittadino") {
+    const colsInChoice = [...new Set(cells.map(([, col]) => col))];
+    score += Math.max(pressure * 1.45, bestForestCell(colsInChoice) ? 5 : 0);
+  }
   if (building.id === "muraglia") score += pressure >= 4 ? pressure * 2.6 : 1;
   if (building.id === "torre") score += cells.some(([row, col]) => (
     [[row - 1, col], [row + 1, col], [row, col - 1], [row, col + 1]]
@@ -1667,7 +1759,7 @@ function botMergeTarget(buildingId) {
 function availableBotActions() {
   const actions = [];
   game.marketSlots.forEach((slot, index) => {
-    if (!slot || slot.type === "token" || !isPurchasable(index)) return;
+    if (!slot || !isPurchasable(index)) return;
     const building = getBuilding(slot.buildingId);
     const placement = bestPlacementForBuilding(building.id);
     const surcharge = purchaseSurcharge(index);
@@ -1720,6 +1812,10 @@ function performBotStep() {
     else game.pendingLevelUps = 0;
     return;
   }
+  if (player.pendingCitizenChoices.length) {
+    resolveCitizenChoice(bestCitizenChoice(player.pendingCitizenChoices[0]));
+    return;
+  }
   if (game.pendingEffects.length) {
     const target = bestEnemyForEffect(game.pendingEffects[0]);
     if (target) applyPendingEffectToEnemy(target);
@@ -1727,9 +1823,12 @@ function performBotStep() {
     return;
   }
   if (game.pendingForestRemovals > 0) {
-    const forest = bestForestCell();
+    const forest = bestForestCell(currentForestRemovalRule(player));
     if (forest) removeForestAt(forest.row, forest.col, false);
-    else game.pendingForestRemovals = 0;
+    else {
+      game.pendingForestRemovals = 0;
+      player.pendingForestRemovalRules = [];
+    }
     return;
   }
   if (game.pendingReactivations > 0) {
@@ -1819,7 +1918,7 @@ function selectMarketAction(slotIndex, mode = "build") {
     return;
   }
   const slot = game.marketSlots[slotIndex];
-  if (!slot || slot.type === "token") {
+  if (!slot) {
     addLog("Quello spazio non contiene una tessera acquistabile");
     return;
   }
@@ -1868,11 +1967,8 @@ function movePurchaseTokenFromSelection() {
     return;
   }
   const boughtSlotIndex = game.selected?.slotIndex;
-  const oldTokenIndex = game.tokenIndex;
   if (Number.isInteger(boughtSlotIndex)) {
     game.tokenAtCenter = false;
-    game.marketSlots[boughtSlotIndex] = { type: "token" };
-    game.marketSlots[oldTokenIndex] = drawTile();
     game.tokenIndex = boughtSlotIndex;
   }
 }
@@ -2005,6 +2101,11 @@ function removeForestAt(row, col, consumeMarketTile = false) {
     addLog("Nessuna rimozione Bosco disponibile");
     return;
   }
+  const allowedCols = consumeMarketTile ? null : currentForestRemovalRule();
+  if (allowedCols && !allowedCols.includes(col)) {
+    addLog(`Questa rimozione puo togliere Boschi solo nella colonna ${allowedCols.map((allowedCol) => allowedCol + 1).join(", ")}`);
+    return;
+  }
   game.forests.delete(key);
   activePlayer().forestsRemoved += 1;
   if (consumeMarketTile) {
@@ -2012,6 +2113,7 @@ function removeForestAt(row, col, consumeMarketTile = false) {
     game.selected = null;
   } else {
     game.pendingForestRemovals -= 1;
+    activePlayer().pendingForestRemovalRules.shift();
   }
   addLog(`Bosco rimosso in riga ${row + 1}, colonna ${col + 1}`);
   finishTurnIfReady();
@@ -2035,7 +2137,7 @@ function damageBuilding(building) {
   addLog(`${building.name} viene distrutto dal mostro: -1 PV a fine partita`);
 }
 
-function advanceEnemy(key) {
+function advanceSquareEnemy(key) {
   const enemy = currentEnemies()[key];
   if (enemy.position <= 0) {
     enemy.position = 1;
@@ -2068,6 +2170,37 @@ function advanceEnemy(key) {
 
   enemy.position += 1;
   addLog(`${enemy.name} avanza alla riga ${enemy.position}`);
+}
+
+function advanceRoundEnemy(key) {
+  const enemy = currentEnemies()[key];
+  if (enemy.position <= 0) {
+    enemy.position = 1;
+    addLog(`${enemy.name} torna alla prima riga`);
+    return;
+  }
+
+  const targetRow = enemy.position;
+  if (targetRow >= rows) {
+    addLog(`${enemy.name} supera l'ultima riga`);
+    eliminateActivePlayer(`${enemy.name} ha oltrepassato la plancia`);
+    return;
+  }
+
+  const building = buildingAt(targetRow, enemy.colStart);
+  if (building) {
+    damageBuilding(building);
+    addLog(`${enemy.name} distrugge davanti a se e resta fermo`);
+    return;
+  }
+
+  enemy.position += 1;
+  addLog(`${enemy.name} avanza alla riga ${enemy.position}`);
+}
+
+function advanceEnemy(key) {
+  if (isRoundMonsterMode()) advanceRoundEnemy(key);
+  else advanceSquareEnemy(key);
 }
 
 function resolveAttack(diceCount = 2, forcedRolls = null, shouldRender = true, label = "Attacco") {
@@ -2110,14 +2243,18 @@ function levelUpEnemy(key) {
 
 function applyHitToEnemy(key) {
   const enemy = currentEnemies()[key];
+  const lives = enemy.lives ?? currentMonsterMode().lives ?? 3;
   enemy.damage += 1;
-  addLog(`Danno su ${enemy.name}: ${enemy.damage}/3`);
-  if (enemy.damage >= 3) {
+  addLog(`Danno su ${enemy.name}: ${enemy.damage}/${lives}`);
+  if (enemy.damage >= lives) {
     enemy.damage = 0;
-    enemy.position = 0;
+    enemy.position = isRoundMonsterMode() ? 1 : 0;
     game.vp += 1;
     activePlayer().monstersKilled += 1;
-    addLog(`${enemy.name} sconfitto: +1 PV e torna alla riga 0`);
+    const returnText = isRoundMonsterMode()
+      ? (lives === 1 ? "colpito: +1 PV e torna subito alla prima riga" : "sconfitto: +1 PV e torna alla prima riga")
+      : "sconfitto: +1 PV e torna alla riga 0";
+    addLog(`${enemy.name} ${returnText}`);
   }
 }
 
@@ -2157,6 +2294,7 @@ function reactivateBuildingAt(row, col) {
 }
 
 function resetGame() {
+  if (monsterModes[game.monsterMode]?.disabled) game.monsterMode = "square";
   document.querySelectorAll("[data-player-name]").forEach((input) => {
     const index = Number(input.dataset.playerName);
     if ((game.playerTypes[index] ?? "human") !== "bot") {
@@ -2192,11 +2330,17 @@ function resetGame() {
   showGameScreen();
 
   log.innerHTML = "";
-  addLog(`${game.mode === "solo" ? "Solitario" : "Multiplayer"}: ${activePlayer().name} inizia`);
+  addLog(`${game.mode === "solo" ? "Solitario" : "Multiplayer"} | ${currentMonsterMode().label}: ${activePlayer().name} inizia`);
   renderAll();
 }
 
 document.addEventListener("click", (event) => {
+  const citizenTarget = event.target.closest("[data-citizen-choice]");
+  if (citizenTarget) {
+    resolveCitizenChoice(citizenTarget.dataset.citizenChoice);
+    return;
+  }
+
   const viewTarget = event.target.closest("[data-view-player]");
   if (viewTarget) {
     game.viewPlayerIndex = Number(viewTarget.dataset.viewPlayer);
@@ -2283,6 +2427,14 @@ document.querySelectorAll("[data-player-count]").forEach((button) => {
       count === 1 ? "human" : game.playerTypes[index] ?? (index === 0 ? "human" : "bot")
     ));
     game.playerNames = Array.from({ length: count }, (_, index) => game.playerNames[index] ?? `G${index + 1}`);
+    renderSetup();
+  });
+});
+document.querySelectorAll("[data-monster-mode]").forEach((button) => {
+  button.addEventListener("click", () => {
+    const mode = button.dataset.monsterMode;
+    if (!monsterModes[mode] || monsterModes[mode].disabled) return;
+    game.monsterMode = mode;
     renderSetup();
   });
 });
